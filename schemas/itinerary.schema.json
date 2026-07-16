@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "itinerary",
+  "type": "object",
+  "required": ["meta", "days"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["title", "start_date"],
+      "properties": {
+        "title": { "type": "string" },
+        "start_date": { "type": "string" },
+        "generated_at": { "type": "string" },
+        "degraded": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "days": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["day_index", "date", "segments", "stops", "overnight"],
+        "properties": {
+          "day_index": { "type": "integer" },
+          "date": { "type": "string" },
+          "segments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "from": { "$ref": "#/definitions/place" },
+                "to": { "$ref": "#/definitions/place" },
+                "distance_km": { "type": "number" },
+                "duration_min": { "type": "number" },
+                "roads": { "type": "array", "items": { "type": "string" } },
+                "refuel_points": {
+                  "type": "array",
+                  "items": {
+                    "allOf": [
+                      { "$ref": "#/definitions/place" },
+                      { "properties": { "km_from_start": { "type": "number" } } }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "stops": {
+            "type": "array",
+            "items": {
+              "allOf": [
+                { "$ref": "#/definitions/place" },
+                {
+                  "properties": {
+                    "elevation_m": { "type": ["number", "null"] },
+                    "visit_min": { "type": "number" },
+                    "advisories": { "type": "array" }
+                  }
+                }
+              ]
+            }
+          },
+          "overnight": {
+            "allOf": [
+              { "$ref": "#/definitions/place" },
+              { "properties": { "elevation_m": { "type": ["number", "null"] } } }
+            ]
+          },
+          "warnings": { "type": "array" }
+        }
+      }
+    },
+    "plan_b": { "type": "array" }
+  },
+  "definitions": {
+    "place": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "lnglat": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+        "poi_id": { "type": "string" },
+        "source": { "type": "string", "enum": ["amap", "unverified"] }
+      }
+    }
+  }
+}

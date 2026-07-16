@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "trip_request",
+  "type": "object",
+  "required": ["destination", "start_date", "days", "vehicle", "travelers"],
+  "properties": {
+    "destination": { "type": "string" },
+    "start_date": { "type": "string", "description": "YYYY-MM-DD 或 +Nd（测试用相对日期）" },
+    "days": { "type": "integer", "minimum": 1 },
+    "vehicle": {
+      "type": "object",
+      "required": ["type", "energy"],
+      "properties": {
+        "type": { "type": "string" },
+        "energy": { "type": "string", "enum": ["fuel", "ev"] },
+        "range_km": { "type": "number" }
+      }
+    },
+    "travelers": {
+      "type": "object",
+      "required": ["count"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 1 },
+        "drivers": { "type": "integer", "minimum": 1, "default": 1 },
+        "constraints": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "daily_drive_cap_min": { "type": "integer", "default": 480 },
+    "pace": { "type": "string", "enum": ["packed", "balanced", "relaxed"], "default": "balanced" },
+    "route_strategy": {
+      "type": "string",
+      "enum": ["default", "highway_first", "avoid_highway", "scenic"],
+      "default": "default"
+    },
+    "driver_profile": {
+      "type": "string",
+      "enum": ["novice", "normal", "experienced"],
+      "default": "normal"
+    },
+    "must_visit": { "type": "array", "items": { "type": "string" } },
+    "must_avoid": { "type": "array", "items": { "type": "string" } },
+    "overnight_altitude_cap_m": { "type": ["number", "null"], "default": null }
+  }
+}
