@@ -45,11 +45,18 @@ def place_key(place):
 
 
 def check_backtrack(days, route_style):
-    """跨天追踪：路段反向重走 + 过夜点重返。返回 [(day_index, detail)]。"""
+    """跨天追踪：路段反向重走 + 过夜点重返。返回 [(day_index, detail)]。
+
+    不报的正常玩法：
+    - 同日原路往返（基地放射式一日游：住 A 去景点再回 A）
+    - 连续天同一过夜点（连住）
+    - loop 末日回出发地 / out_and_back 的整体返程
+    """
     hits = []
     seen_edges = {}      # (from_key, to_key) -> day_index 首次出现
     seen_overnights = {} # place_key -> day_index 首次过夜
     last_day_index = days[-1]["day_index"] if days else None
+    prev_overnight_key = None
     for day in days:
         di = day["day_index"]
         for seg in day.get("segments", []):
@@ -58,18 +65,21 @@ def check_backtrack(days, route_style):
                 continue
             if (tk, fk) in seen_edges:
                 first = seen_edges[(tk, fk)]
-                # out_and_back 模式下返程反向重走是预期，不报
-                if route_style != "out_and_back":
+                # 同日反向重走 = 当日往返，正常；out_and_back 模式返程也是预期
+                if first != di and route_style != "out_and_back":
                     hits.append((di, f"“{seg.get('from', {}).get('name', '?')}→{seg.get('to', {}).get('name', '?')}”反向重走了第 {first} 天的路段，需与用户确认走法（可能是封路绕行或应改环线）"))
             seen_edges.setdefault((fk, tk), di)
         ok = place_key(day.get("overnight"))
         if ok:
-            if ok in seen_overnights:
+            if ok == prev_overnight_key:
+                pass  # 连住，正常
+            elif ok in seen_overnights:
                 first = seen_overnights[ok]
                 # 末日回到出发地过夜是环线收尾，不报
                 if not (route_style == "loop" and di == last_day_index):
-                    hits.append((di, f"过夜点“{day.get('overnight', {}).get('name', '?')}”与第 {first} 天重复，行程存在折返，需与用户确认"))
+                    hits.append((di, f"过夜点“{day.get('overnight', {}).get('name', '?')}”与第 {first} 天重复，中间去了别处又折返，需与用户确认"))
             seen_overnights.setdefault(ok, di)
+            prev_overnight_key = ok
     return hits
 
 
@@ -177,6 +187,20 @@ def main():
         ov = day.get("overnight") or {}
         if ov.get("elevation_m") is not None:
             prev_ov_elev = ov["elevation_m"]
+
+    # 预览模式：顶部横幅已全局声明"全部未核验"，逐地点的 UNVERIFIED_POI 聚合为每天一条
+    if itinerary.get("meta", {}).get("preview_mode"):
+        for day in itinerary.get("days", []):
+            unv = [w for w in day.get("warnings", []) if w["code"] == "UNVERIFIED_POI"]
+            if len(unv) > 1:
+                day["warnings"] = [w for w in day["warnings"] if w["code"] != "UNVERIFIED_POI"]
+                day["warnings"].append({"day": day["day_index"], "code": "UNVERIFIED_POI", "level": "warning",
+                                        "detail": f"本日 {len(unv)} 个地点坐标未经核验（预览模式，配置高德后自动消除）"})
+        agg = {w["day"] for w in all_warnings if w["code"] == "UNVERIFIED_POI"}
+        all_warnings = [w for w in all_warnings if w["code"] != "UNVERIFIED_POI"]
+        for day in itinerary.get("days", []):
+            if day["day_index"] in agg:
+                all_warnings.extend(w for w in day["warnings"] if w["code"] == "UNVERIFIED_POI")
 
     # BACKTRACK：跨天规则，在逐日检查之后统一跑
     if not trip_request.get("allow_backtrack", False):

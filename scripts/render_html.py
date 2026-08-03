@@ -48,11 +48,20 @@ def esc(s):
     return html.escape(str(s)) if s is not None else ""
 
 
+PREVIEW_MODE = False  # main() 里按 meta.preview_mode 设置
+
+
 def place_line(place, label):
     if not place:
         return ""
     src = place.get("source", "unverified")
-    src_badge = "" if src == "amap" else f'<span class="badge unverified">{"攻略原文" if src == "doc_claim" else "未核验"}</span>'
+    if src == "amap":
+        src_badge = ""
+    elif src == "doc_claim":
+        src_badge = '<span class="badge unverified">攻略原文</span>'
+    else:
+        # 预览模式下横幅已全局声明未核验，逐地点徽章只是噪音
+        src_badge = "" if PREVIEW_MODE else '<span class="badge unverified">未核验</span>'
     pin_badge = '<span class="badge pinned">已钉</span>' if place.get("pinned") else ""
     elev = place.get("elevation_m")
     elev_txt = f' · 海拔 {elev:.0f}m' if elev is not None else ""
@@ -349,6 +358,9 @@ def main():
     summary = json.loads(summary_raw)
 
     meta = itinerary.get("meta", {})
+
+    global PREVIEW_MODE
+    PREVIEW_MODE = bool(meta.get("preview_mode"))
 
     preview_banner = ""
     if meta.get("preview_mode"):
