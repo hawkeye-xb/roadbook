@@ -4,7 +4,7 @@
 用法：
   python3 validate_route.py --input work/itinerary.json [--request work/trip_request.json]
 
-规则（v0，共 7 条，均为可程序化判断，不含尽调/搜索类）：
+规则（共 8 条，均为可程序化判断，不含尽调/搜索类）：
   UNVERIFIED_POI    warning  地点 source != "amap"
   MISSING_DATA      warning  该有 elevation_m 却是 null
   LONG_DRIVE        warning  单日总驾驶 > cap
@@ -12,6 +12,8 @@
   HIGH_ALTITUDE_SLEEP warning 过夜海拔超阈值
   RAPID_ASCENT      warning  过夜海拔较前一晚升幅 > 800m 且当前 > 2500m
   FUEL_GAP          warning/error 相邻补给点间隔超过续航比例
+  BACKTRACK         warning  重走已走过的路段/重返已住过的过夜点（allow_backtrack=false 时生效；
+                             命中不代表一定错——可能是封路绕行，必须把走法问题抛给用户决定）
 
 规则只读 itinerary.json 本身；warnings 数组由本脚本独占写入并原地保存。
 """
@@ -28,6 +30,47 @@ def load_json(path):
 def driver_multiplier(profile):
     # experienced 司机对长驾驶时长的容忍度略高，不写进 SKILL.md，只在这里生效
     return {"novice": 0.85, "normal": 1.0, "experienced": 1.15}.get(profile, 1.0)
+
+
+def place_key(place):
+    """地点身份：poi_id > 坐标（约 1km 粒度）> 名字。用于回头路比对。"""
+    if not place:
+        return None
+    if place.get("poi_id"):
+        return "poi:" + place["poi_id"]
+    ll = place.get("lnglat")
+    if ll and len(ll) == 2:
+        return f"ll:{round(ll[0], 2)},{round(ll[1], 2)}"
+    return "name:" + (place.get("name") or "?")
+
+
+def check_backtrack(days, route_style):
+    """跨天追踪：路段反向重走 + 过夜点重返。返回 [(day_index, detail)]。"""
+    hits = []
+    seen_edges = {}      # (from_key, to_key) -> day_index 首次出现
+    seen_overnights = {} # place_key -> day_index 首次过夜
+    last_day_index = days[-1]["day_index"] if days else None
+    for day in days:
+        di = day["day_index"]
+        for seg in day.get("segments", []):
+            fk, tk = place_key(seg.get("from")), place_key(seg.get("to"))
+            if not fk or not tk or fk == tk:
+                continue
+            if (tk, fk) in seen_edges:
+                first = seen_edges[(tk, fk)]
+                # out_and_back 模式下返程反向重走是预期，不报
+                if route_style != "out_and_back":
+                    hits.append((di, f"“{seg.get('from', {}).get('name', '?')}→{seg.get('to', {}).get('name', '?')}”反向重走了第 {first} 天的路段，需与用户确认走法（可能是封路绕行或应改环线）"))
+            seen_edges.setdefault((fk, tk), di)
+        ok = place_key(day.get("overnight"))
+        if ok:
+            if ok in seen_overnights:
+                first = seen_overnights[ok]
+                # 末日回到出发地过夜是环线收尾，不报
+                if not (route_style == "loop" and di == last_day_index):
+                    hits.append((di, f"过夜点“{day.get('overnight', {}).get('name', '?')}”与第 {first} 天重复，行程存在折返，需与用户确认"))
+            seen_overnights.setdefault(ok, di)
+    return hits
 
 
 def check_day(day, prev_overnight_elev, cap_min, alt_cap_m, range_km, energy):
@@ -134,6 +177,16 @@ def main():
         ov = day.get("overnight") or {}
         if ov.get("elevation_m") is not None:
             prev_ov_elev = ov["elevation_m"]
+
+    # BACKTRACK：跨天规则，在逐日检查之后统一跑
+    if not trip_request.get("allow_backtrack", False):
+        route_style = trip_request.get("route_style", "loop")
+        days = itinerary.get("days", [])
+        by_index = {d["day_index"]: d for d in days}
+        for di, detail in check_backtrack(days, route_style):
+            entry = {"day": di, "code": "BACKTRACK", "level": "warning", "detail": detail}
+            by_index[di].setdefault("warnings", []).append(entry)
+            all_warnings.append(entry)
 
     with open(args.input, "w", encoding="utf-8") as f:
         json.dump(itinerary, f, ensure_ascii=False, indent=2)

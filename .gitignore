@@ -1,0 +1,4 @@
+work/
+outputs/
+.DS_Store
+__pycache__/

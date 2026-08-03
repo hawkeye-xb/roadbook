@@ -32,6 +32,17 @@
       "enum": ["default", "highway_first", "avoid_highway", "scenic"],
       "default": "default"
     },
+    "route_style": {
+      "type": "string",
+      "enum": ["loop", "out_and_back", "one_way"],
+      "default": "loop",
+      "description": "环线（默认）/原路往返/单程甩尾。自驾默认环线不走回头路"
+    },
+    "allow_backtrack": {
+      "type": "boolean",
+      "default": false,
+      "description": "false 时 validate 的 BACKTRACK 规则生效，命中即询问用户"
+    },
     "driver_profile": {
       "type": "string",
       "enum": ["novice", "normal", "experienced"],

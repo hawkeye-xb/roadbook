@@ -11,6 +11,7 @@
         "title": { "type": "string" },
         "start_date": { "type": "string" },
         "generated_at": { "type": "string" },
+        "preview_mode": { "type": "boolean", "description": "true = 无高德核验的预览模式，渲染需持续显示横幅" },
         "degraded": { "type": "array", "items": { "type": "string" } }
       }
     },
@@ -22,6 +23,11 @@
         "properties": {
           "day_index": { "type": "integer" },
           "date": { "type": "string" },
+          "fidelity": {
+            "type": "string",
+            "enum": ["skeleton", "filled", "verified"],
+            "description": "本日分辨率：骨架（仅过夜点+路耗）/已填充（景点动线齐）/已核验（过完 L3）"
+          },
           "segments": {
             "type": "array",
             "items": {
@@ -65,11 +71,36 @@
               { "properties": { "elevation_m": { "type": ["number", "null"] } } }
             ]
           },
+          "claims": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/claim" },
+            "description": "仅涉及本日的核验主张；跨天/全程的放顶层 claims"
+          },
           "warnings": { "type": "array" }
         }
       }
     },
-    "plan_b": { "type": "array" }
+    "claims": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/claim" },
+      "description": "全程级核验主张（如某公路季节性开放）"
+    },
+    "plan_b": { "type": "array" },
+    "change_log": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "at": { "type": "string" },
+          "summary": { "type": "string" },
+          "affected_days": { "type": "array", "items": { "type": "integer" } },
+          "distance_km_delta": { "type": "number" },
+          "duration_min_delta": { "type": "number" },
+          "warnings_delta": { "type": "integer" }
+        }
+      },
+      "description": "diff_itinerary.py 追加；渲染的\"本次变更\"块读取最后一条"
+    }
   },
   "definitions": {
     "place": {
@@ -79,7 +110,44 @@
         "name": { "type": "string" },
         "lnglat": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
         "poi_id": { "type": "string" },
-        "source": { "type": "string", "enum": ["amap", "unverified"] }
+        "source": {
+          "type": "string",
+          "enum": ["amap", "doc_claim", "llm_guess", "unverified"],
+          "description": "amap=高德核验；doc_claim=来自用户攻略原文；llm_guess=模型构思未核验；unverified=其他未核验"
+        },
+        "pinned": { "type": "boolean", "description": "用户确认过的元素，非用户明说不改动" }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "required": ["claim", "type", "verdict"],
+      "properties": {
+        "claim": { "type": "string", "description": "被核验的主张原文或归一化表述" },
+        "type": {
+          "type": "string",
+          "enum": ["gate_access", "shuttle_transfer", "reservation", "permit", "seasonal_road", "phenology", "refuel", "altitude", "other"],
+          "description": "对应 checklists/categories.md 的 8 类 + other"
+        },
+        "verdict": {
+          "type": "string",
+          "enum": ["confirmed", "unverified", "contradicted", "stale", "user_confirmed"],
+          "description": "user_confirmed=检索不到但用户拍板放行"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["source"],
+            "properties": {
+              "source": { "type": "string", "description": "official / rednote / web_search_generic / doc / user" },
+              "date": { "type": "string", "description": "证据发布时间，尽量精确到月" },
+              "quote": { "type": "string", "description": "原文引文，供人一眼复核判定" },
+              "url": { "type": "string" }
+            }
+          }
+        },
+        "checked_at": { "type": "string", "description": "本次核验日期 YYYY-MM-DD；check_freshness.py 据此降级 stale" },
+        "affected_days": { "type": "array", "items": { "type": "integer" } }
       }
     }
   }
