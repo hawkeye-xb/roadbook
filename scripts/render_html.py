@@ -26,6 +26,7 @@ WARNING_LABELS = {
     "RAPID_ASCENT": "海拔爬升过快",
     "FUEL_GAP": "补给间隔风险",
     "BACKTRACK": "回头路待确认",
+    "DOC_CLAIM_GAP": "原文数字偏差",
 }
 
 FIDELITY_LABELS = {
@@ -134,6 +135,16 @@ def render_day(day):
     drive_html = (f'<div class="drive-line"><span class="drive-label">{drive_label}</span>'
                   f'<b>{total_km:.1f}km / {total_min/60:.1f}h</b></div>') if total_min else ""
 
+    # doc 模式：原文声称 vs 实测对照（有 claimed 就展示，差超 25% 标红）
+    cl_km = sum((s.get("claimed") or {}).get("distance_km") or 0 for s in day.get("segments", []))
+    cl_min = sum((s.get("claimed") or {}).get("duration_min") or 0 for s in day.get("segments", []))
+    diff_html = ""
+    if cl_km and total_km:
+        big = abs(total_km - cl_km) / cl_km > 0.25 or (cl_min and total_min and abs(total_min - cl_min) / cl_min > 0.25)
+        cl_txt = f"{cl_km:.0f}km" + (f" / {cl_min/60:.1f}h" if cl_min else "")
+        ms_txt = f"{total_km:.0f}km" + (f" / {total_min/60:.1f}h" if total_min else "")
+        diff_html = (f'<div class="claim-diff{" big" if big else ""}">📋 原文称 {cl_txt}，实测 {ms_txt}</div>')
+
     chain = elevation_chain(day)
     chain_html = f'<div class="elev-chain">海拔 {esc(chain)}</div>' if chain else ""
 
@@ -187,6 +198,7 @@ def render_day(day):
       <div class="day-route-title">{esc(title_route)}</div>
       {chain_html}
       {drive_html}
+      {diff_html}
       {note_html}
       {tips_html}
       {'<ul class="stops">' + stops_html + '</ul>' if stops_html else ''}
@@ -347,6 +359,9 @@ TEMPLATE = """<!doctype html>
                 font-size:0.9rem; margin:0.25rem 0; }
   .drive-label { color:var(--ink-dim); font-size:0.8rem; }
   .day-note { font-size:0.83rem; color:var(--ink-dim); margin:0.3rem 0; }
+  .claim-diff { font-size:0.82rem; color:var(--ink-dim); margin:0.2rem 0;
+                padding:0.25rem 0.5rem; background:var(--bg); border-radius:4px; }
+  .claim-diff.big { background:var(--err-bg); color:var(--err); font-weight:600; }
   .segment { margin:0.5rem 0; font-size:0.9rem; }
   .place { display:flex; gap:0.5em; align-items:center; flex-wrap:wrap; }
   .place-label { color:var(--ink-dim); font-size:0.76rem; min-width:2.4em; }

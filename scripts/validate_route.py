@@ -14,6 +14,8 @@
   FUEL_GAP          warning/error 相邻补给点间隔超过续航比例
   BACKTRACK         warning  重走已走过的路段/重返已住过的过夜点（allow_backtrack=false 时生效；
                              命中不代表一定错——可能是封路绕行，必须把走法问题抛给用户决定）
+  DOC_CLAIM_GAP     warning  攻略原文声称的当日里程/时长与实测差 >25%（doc 模式核心产出，
+                             渲染层据此展示"原文称 X 实测 Y"对照）
 
 规则只读 itinerary.json 本身；warnings 数组由本脚本独占写入并原地保存。
 """
@@ -109,6 +111,16 @@ def check_day(day, prev_overnight_elev, cap_min, alt_cap_m, range_km, energy):
     ov = day.get("overnight") or {}
     if ov.get("lnglat") and ov.get("elevation_m") is None:
         add("warning", "MISSING_DATA", "过夜点缺海拔数据（elevation API 可能失败或未跑 enrich）")
+
+    # DOC_CLAIM_GAP：攻略原文数字 vs 实测（只在段有 claimed 且实测已回填时比）
+    cl_km = sum((s.get("claimed") or {}).get("distance_km") or 0 for s in day.get("segments", []))
+    cl_min = sum((s.get("claimed") or {}).get("duration_min") or 0 for s in day.get("segments", []))
+    ms_km = sum(s.get("distance_km") or 0 for s in day.get("segments", []) if s.get("claimed"))
+    ms_min = sum(s.get("duration_min") or 0 for s in day.get("segments", []) if s.get("claimed"))
+    if cl_km and ms_km and abs(ms_km - cl_km) / cl_km > 0.25:
+        add("warning", "DOC_CLAIM_GAP", f"原文称约 {cl_km:.0f}km，实测 {ms_km:.0f}km（差 {abs(ms_km-cl_km)/cl_km*100:.0f}%）")
+    elif cl_min and ms_min and abs(ms_min - cl_min) / cl_min > 0.25:
+        add("warning", "DOC_CLAIM_GAP", f"原文称约 {cl_min/60:.1f}h，实测 {ms_min/60:.1f}h（差 {abs(ms_min-cl_min)/cl_min*100:.0f}%）")
 
     # LONG_DRIVE / VERY_LONG_DRIVE
     total_drive = sum(seg.get("duration_min") or 0 for seg in day.get("segments", []))

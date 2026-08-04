@@ -49,6 +49,14 @@
                   "description": "真实道路几何 [lng,lat] 点列，fetch_geometry.py 写入（抽稀后）；量大，模型不要读写此字段"
                 },
                 "special": { "type": "string", "description": "特殊路段名（如某风景公路），地图上独立配色并在 tooltip 标注" },
+                "claimed": {
+                  "type": "object",
+                  "properties": {
+                    "distance_km": { "type": "number" },
+                    "duration_min": { "type": "number" }
+                  },
+                  "description": "doc 模式：攻略原文声称的数字，解析时写入且实测后保留，用于'原文称 X 实测 Y'对照"
+                },
                 "roads": { "type": "array", "items": { "type": "string" } },
                 "refuel_points": {
                   "type": "array",
