@@ -65,6 +65,8 @@ description: 自驾路书流水线：输入旅行需求或既有攻略（文档/
 
 长距离段用 `maps_around_search`（关键词"加油站"/"充电站"）沿途分段查补能点。海拔跑 `python3 scripts/enrich.py --input work/itinerary.json` 批量补（Open-Elevation 免费，大陆坐标几十米误差正常）。天气工具只覆盖未来 3-4 天，超窗口不填。
 
+坐标齐了之后跑 `python3 scripts/fetch_geometry.py --input work/itinerary.json` 取真实道路几何（沿公路走的线，不是直线），地图渲染靠它。**几何数据量大，脚本直接落盘，不要读 `geometry` 字段进对话**。stdout 里的 `failures` 要看：取不到几何的段（如当前季节封路的公路）保持直连虚线渲染，并把原因告知用户。
+
 填充中的选择题同样**给带取舍的选项**（"第 6 晚三个落点：A…/B…/C…，默认 A"）。用户拍板的元素标 `pinned: true`。完成的天 `fidelity: "filled"`，**可以部分天先填充先渲染**，不要求全部齐才走下一层。
 
 ## L3 核验（质量门）
@@ -114,10 +116,11 @@ roadtrip-planner/
 ├── schemas/                    # trip_request / itinerary 结构定义
 ├── scripts/
 │   ├── enrich.py               # 批量海拔回写
+│   ├── fetch_geometry.py       # 真实道路几何取数（高德 REST 直连，不过模型上下文）
 │   ├── validate_route.py       # 可计算校验（驾驶/海拔/补能/回头路），独占写 warnings
 │   ├── check_freshness.py      # claims 时效检查，过期降 stale
 │   ├── diff_itinerary.py       # 版本对比 → 本次变更块
-│   ├── render_html.py          # itinerary.json → 自包含 HTML（地图+卡片+核验标注）
+│   ├── render_html.py          # itinerary.json → 自包含 HTML（双栏：卡片+真实路线地图）
 │   └── summarize.py            # 五项摘要统计
 ├── references/amap-mcp-usage.md  # 高德授权引导
 ├── examples/xinjiang-16d/      # 脱敏 golden 用例（源攻略 + 预期核验行为）

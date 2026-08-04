@@ -4,9 +4,11 @@
 用法：
   python3 render_html.py --input work/itinerary.json --out outputs/trip.html
 
-渲染内容：Leaflet 地图（有坐标才画；CDN 加载失败自动隐藏，卡片不受影响）、
-逐日卡片（分辨率徽章 骨架/已填充/已核验）、claims 核验标注（✅❓❌⏳）、
-预览模式横幅（meta.preview_mode）、本次变更块（change_log 最后一条）。
+布局：左侧逐日卡片栏 + 右侧全高地图（移动端上下堆叠）。
+地图：真实道路几何 polyline（segments[].geometry，由 fetch_geometry.py 写入；
+无几何的段回退为虚线直连）、分类标记（🏨 过夜 / ⭐ 途经 / ⛽ 补给）带弹窗、
+风险日变色、点卡片高亮当天路线。
+卡片：海拔链、风险徽章、真实/估算驾驶标注、分辨率徽章、claims 核验标注。
 """
 import argparse
 import html
@@ -40,15 +42,44 @@ VERDICT_ICONS = {
     "stale": ("⏳", "信息可能过期，建议复检"),
 }
 
-DAY_COLORS = ["#2f6f63", "#a5702a", "#4a6fa5", "#a5432e", "#6b5b95", "#3d8361",
-              "#b3541e", "#39648c", "#8c4f66", "#5c7a29", "#7a5b8c", "#2a7f8c"]
+DAY_COLORS = ["#2f6f63", "#b3541e", "#4a6fa5", "#8c4f66", "#6b5b95", "#3d8361",
+              "#a5702a", "#39648c", "#a5432e", "#5c7a29", "#7a5b8c", "#2a7f8c"]
+COLOR_ROUGH = "#8f1d1d"
+
+PREVIEW_MODE = False  # main() 里按 meta.preview_mode 设置
 
 
 def esc(s):
     return html.escape(str(s)) if s is not None else ""
 
 
-PREVIEW_MODE = False  # main() 里按 meta.preview_mode 设置
+def day_risk(day):
+    """低/中/高：error 级警告→高；warning（除预览聚合的坐标项）或季节性道路 claim→中。"""
+    warns = [w for w in day.get("warnings", []) if w.get("code") != "UNVERIFIED_POI"]
+    if any(w.get("level") == "error" for w in warns):
+        return "high"
+    if warns or any(c.get("type") == "seasonal_road" for c in day.get("claims", []) or []):
+        return "mid"
+    return "low"
+
+
+def elevation_chain(day):
+    """起点→途经→过夜的海拔链，如 800m → 1900m → 800m。缺数据的点跳过。"""
+    elevs = []
+    segs = day.get("segments", [])
+    if segs:
+        e = (segs[0].get("from") or {}).get("elevation_m")
+        if e is not None:
+            elevs.append(e)
+    for stop in day.get("stops", []):
+        if stop.get("elevation_m") is not None:
+            elevs.append(stop["elevation_m"])
+    ov = day.get("overnight") or {}
+    if ov.get("elevation_m") is not None:
+        elevs.append(ov["elevation_m"])
+    if len(elevs) < 2:
+        return ""
+    return " → ".join(f"{e:.0f}m" for e in elevs)
 
 
 def place_line(place, label):
@@ -60,7 +91,6 @@ def place_line(place, label):
     elif src == "doc_claim":
         src_badge = '<span class="badge unverified">攻略原文</span>'
     else:
-        # 预览模式下横幅已全局声明未核验，逐地点徽章只是噪音
         src_badge = "" if PREVIEW_MODE else '<span class="badge unverified">未核验</span>'
     pin_badge = '<span class="badge pinned">已钉</span>' if place.get("pinned") else ""
     elev = place.get("elevation_m")
@@ -91,19 +121,29 @@ def render_claims(claims, heading=None):
     return f'<div class="claims">{head}<ul>{items}</ul></div>'
 
 
+RISK_LABELS = {"low": ("低", "risk-low"), "mid": ("中", "risk-mid"), "high": ("高", "risk-high")}
+
+
 def render_day(day):
-    segs_html = ""
+    di = day.get("day_index", "?")
+    total_km = sum(s.get("distance_km") or 0 for s in day.get("segments", []))
+    total_min = sum(s.get("duration_min") or 0 for s in day.get("segments", []))
+    all_amap = all((s.get("from") or {}).get("source") == "amap" and (s.get("to") or {}).get("source") == "amap"
+                   for s in day.get("segments", [])) and day.get("segments")
+    drive_label = "真实驾驶" if all_amap and not PREVIEW_MODE else "估算驾驶"
+    drive_html = (f'<div class="drive-line"><span class="drive-label">{drive_label}</span>'
+                  f'<b>{total_km:.1f}km / {total_min/60:.1f}h</b></div>') if total_min else ""
+
+    chain = elevation_chain(day)
+    chain_html = f'<div class="elev-chain">海拔 {esc(chain)}</div>' if chain else ""
+
+    route_names = []
     for seg in day.get("segments", []):
-        dist = seg.get("distance_km")
-        dur = seg.get("duration_min")
-        dist_txt = f'{dist:.0f} km' if dist is not None else "?"
-        dur_txt = f'{dur/60:.1f} 小时' if dur is not None else "?"
-        segs_html += f'''
-        <div class="segment">
-          {place_line(seg.get("from"), "起")}
-          <div class="segment-meta">→ {dist_txt} · {dur_txt}</div>
-          {place_line(seg.get("to"), "终")}
-        </div>'''
+        for p in (seg.get("from"), seg.get("to")):
+            n = (p or {}).get("name")
+            if n and (not route_names or route_names[-1] != n):
+                route_names.append(n)
+    title_route = " → ".join(route_names) if route_names else ""
 
     stops_html = ""
     for stop in day.get("stops", []):
@@ -121,17 +161,23 @@ def render_day(day):
 
     ov = day.get("overnight")
     ov_html = place_line(ov, "过夜") if ov else ""
+    note_html = f'<div class="day-note">{esc(day.get("note"))}</div>' if day.get("note") else ""
 
     fid_label, fid_cls = FIDELITY_LABELS.get(day.get("fidelity", "skeleton"), FIDELITY_LABELS["skeleton"])
+    risk_label, risk_cls = RISK_LABELS[day_risk(day)]
 
     return f'''
-    <section class="day-card" id="day-{day.get("day_index", "?")}">
+    <section class="day-card" id="day-{di}" data-day="{di}">
       <header class="day-head">
-        <span class="day-idx">DAY {day.get("day_index", "?")}</span>
+        <span class="day-idx">D{di}</span>
         <span class="day-date">{esc(day.get("date", ""))}</span>
+        <span class="badge risk {risk_cls}">{risk_label}</span>
         <span class="badge fidelity {fid_cls}">{fid_label}</span>
       </header>
-      {segs_html}
+      <div class="day-route-title">{esc(title_route)}</div>
+      {chain_html}
+      {drive_html}
+      {note_html}
       {'<ul class="stops">' + stops_html + '</ul>' if stops_html else ''}
       {ov_html}
       {render_claims(day.get("claims"))}
@@ -163,36 +209,53 @@ def render_change_block(itinerary):
     </div>'''
 
 
+def to_latlng(lnglat):
+    return [lnglat[1], lnglat[0]]
+
+
 def collect_map_days(itinerary):
-    """每天的坐标点序列（[lat,lng]，Leaflet 顺序），无坐标的天跳过。"""
+    """每天：分段几何（真实/直连）、分类标记。geometry 存 [lng,lat]，此处翻成 Leaflet 的 [lat,lng]。"""
     map_days = []
     for i, day in enumerate(itinerary.get("days", [])):
-        points, seen = [], set()
-
-        def push(place):
-            ll = (place or {}).get("lnglat")
-            if ll and len(ll) == 2:
-                key = (round(ll[1], 5), round(ll[0], 5))
-                if key not in seen:
-                    seen.add(key)
-                    points.append([ll[1], ll[0]])
+        risk = day_risk(day)
+        color = COLOR_ROUGH if risk == "high" else DAY_COLORS[i % len(DAY_COLORS)]
+        segs_js, markers = [], []
 
         for seg in day.get("segments", []):
-            push(seg.get("from"))
-            push(seg.get("to"))
+            geom = seg.get("geometry")
+            o = (seg.get("from") or {}).get("lnglat")
+            d = (seg.get("to") or {}).get("lnglat")
+            if geom and len(geom) > 1:
+                segs_js.append({"pts": [to_latlng(p) for p in geom], "real": True})
+            elif o and d:
+                segs_js.append({"pts": [to_latlng(o), to_latlng(d)], "real": False})
+            for rp in seg.get("refuel_points", []) or []:
+                if rp.get("lnglat"):
+                    markers.append({"t": "rest", "ll": to_latlng(rp["lnglat"]),
+                                    "name": rp.get("name", ""), "desc": "补给点"})
+
         for stop in day.get("stops", []):
-            push(stop)
-        push(day.get("overnight"))
-        if not points:
-            continue
+            if stop.get("lnglat"):
+                desc_bits = [f"D{day.get('day_index')} 途经"]
+                if stop.get("visit_min"):
+                    desc_bits.append(f"游玩约 {stop['visit_min']} 分钟")
+                if stop.get("elevation_m") is not None:
+                    desc_bits.append(f"海拔 {stop['elevation_m']:.0f}m")
+                for a in stop.get("advisories", []) or []:
+                    desc_bits.append(str(a))
+                markers.append({"t": "scenic", "ll": to_latlng(stop["lnglat"]),
+                                "name": stop.get("name", ""), "desc": " · ".join(desc_bits)})
+
         ov = day.get("overnight") or {}
-        ov_ll = ov.get("lnglat")
-        map_days.append({
-            "idx": day.get("day_index"),
-            "color": DAY_COLORS[i % len(DAY_COLORS)],
-            "points": points,
-            "overnight": {"name": ov.get("name", ""), "latlng": [ov_ll[1], ov_ll[0]]} if ov_ll else None,
-        })
+        if ov.get("lnglat"):
+            desc = f"D{day.get('day_index')} 过夜" + (f" · 海拔 {ov['elevation_m']:.0f}m" if ov.get("elevation_m") is not None else "")
+            markers.append({"t": "hotel", "ll": to_latlng(ov["lnglat"]),
+                            "name": ov.get("name", ""), "desc": desc})
+
+        if not segs_js and not markers:
+            continue
+        map_days.append({"idx": day.get("day_index"), "color": color, "risk": risk,
+                         "segs": segs_js, "markers": markers})
     return map_days
 
 
@@ -201,141 +264,212 @@ TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title}</title>
+<title>%%TITLE%%</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"
       onerror="document.documentElement.classList.add('no-map')">
 <style>
-  :root {{
+  :root {
     --bg:#f4f5f1; --surface:#ffffff; --ink:#1c2420; --ink-dim:#57614e;
     --line:#dfe2d8; --accent:#2f6f63; --warn:#a5702a; --warn-bg:#f5ead4;
     --err:#a5432e; --err-bg:#f6ddd4; --unverified-bg:#eee3c8; --unverified-ink:#7a5b18;
-    --pin-bg:#dcebe6; --pin-ink:#2f6f63;
-  }}
-  @media (prefers-color-scheme: dark) {{
-    :root {{
+    --pin-bg:#dcebe6; --pin-ink:#2f6f63; --chain-bg:#e4efe9; --chain-ink:#1f5c4d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
       --bg:#14171a; --surface:#1b1f1e; --ink:#e6e9e2; --ink-dim:#a7b0a2;
       --line:#2c322c; --accent:#64a894; --warn:#d9a15d; --warn-bg:#33291a;
       --err:#d97a63; --err-bg:#332019; --unverified-bg:#3a331c; --unverified-ink:#e0c37a;
-      --pin-bg:#1e3129; --pin-ink:#64a894;
-    }}
-  }}
-  * {{ box-sizing:border-box; }}
-  body {{
+      --pin-bg:#1e3129; --pin-ink:#64a894; --chain-bg:#1e3129; --chain-ink:#8cc7b2;
+    }
+  }
+  * { box-sizing:border-box; }
+  body {
     margin:0; background:var(--bg); color:var(--ink);
     font-family:-apple-system,"PingFang SC",system-ui,sans-serif;
     font-variant-numeric:tabular-nums;
-  }}
-  .wrap {{ max-width:760px; margin:0 auto; padding:1.2rem 1.2rem 4rem; }}
-  h1 {{ font-size:1.5rem; margin:0.8rem 0 0.3rem; }}
-  .preview-banner {{
+  }
+  .preview-banner {
     position:sticky; top:0; z-index:2000; background:var(--err-bg); color:var(--err);
     padding:0.7rem 1rem; font-size:0.88rem; font-weight:600; border-bottom:1px solid var(--err);
-  }}
-  #map {{ height:380px; border-radius:8px; border:1px solid var(--line); margin:1rem 0; }}
-  .no-map #map, #map:empty {{ display:none; }}
-  .summary {{
-    display:flex; flex-wrap:wrap; gap:0.5rem 1.5rem; margin:1rem 0 1.2rem;
-    padding:1rem 1.2rem; background:var(--surface); border:1px solid var(--line); border-radius:8px;
-    font-size:0.9rem; color:var(--ink-dim);
-  }}
-  .summary b {{ color:var(--ink); }}
-  .change-block {{
+  }
+  .layout { display:flex; height:100vh; }
+  .preview-banner ~ .layout { height:calc(100vh - 3rem); }
+  #sidebar { width:460px; overflow-y:auto; padding:1rem 1rem 4rem; flex-shrink:0; }
+  #map { flex:1; height:100%; }
+  .no-map #map { display:none; }
+  @media (max-width: 900px) {
+    .layout { flex-direction:column; height:auto; }
+    #map { order:-1; height:45vh; width:100%; flex:none; position:sticky; top:0; z-index:1500; }
+    #sidebar { width:100%; }
+  }
+  h1 { font-size:1.25rem; margin:0.4rem 0 0.6rem; }
+  .summary {
+    display:flex; flex-wrap:wrap; gap:0.4rem 1.2rem; margin:0 0 1rem;
+    padding:0.8rem 1rem; background:var(--surface); border:1px solid var(--line); border-radius:8px;
+    font-size:0.85rem; color:var(--ink-dim);
+  }
+  .summary b { color:var(--ink); }
+  .change-block {
     background:var(--surface); border:1px solid var(--accent); border-radius:8px;
-    padding:0.9rem 1.2rem; margin-bottom:1.2rem; font-size:0.88rem;
-  }}
-  .change-head {{ font-weight:700; color:var(--accent); }}
-  .change-block ul {{ margin:0.5rem 0 0; padding-left:1.2rem; }}
-  .change-deltas {{ margin-top:0.4rem; color:var(--ink-dim); }}
-  .day-card {{
-    background:var(--surface); border:1px solid var(--line); border-radius:8px;
-    padding:1.1rem 1.3rem; margin-bottom:1rem;
-  }}
-  .day-head {{ display:flex; align-items:baseline; gap:0.8em; margin-bottom:0.6rem; }}
-  .day-idx {{ font-weight:700; color:var(--accent); }}
-  .day-date {{ color:var(--ink-dim); font-size:0.85rem; }}
-  .segment {{ margin:0.5rem 0; font-size:0.92rem; }}
-  .segment-meta {{ color:var(--ink-dim); font-size:0.85rem; margin:0.15rem 0 0.15rem 0.2rem; }}
-  .place {{ display:flex; gap:0.5em; align-items:center; flex-wrap:wrap; }}
-  .place-label {{ color:var(--ink-dim); font-size:0.78rem; min-width:2.4em; }}
-  .badge {{ font-size:0.68rem; padding:0.05em 0.5em; border-radius:3px; }}
-  .badge.unverified {{ background:var(--unverified-bg); color:var(--unverified-ink); }}
-  .badge.pinned {{ background:var(--pin-bg); color:var(--pin-ink); }}
-  .badge.fidelity {{ margin-left:auto; font-weight:600; }}
-  .fid-skeleton {{ background:var(--unverified-bg); color:var(--unverified-ink); }}
-  .fid-filled {{ background:var(--pin-bg); color:var(--pin-ink); }}
-  .fid-verified {{ background:var(--accent); color:var(--surface); }}
-  ul.stops, ul.warnings {{ margin:0.6rem 0 0; padding-left:1.1rem; font-size:0.88rem; }}
-  ul.stops li {{ margin:0.3rem 0; }}
-  .advisory {{ font-size:0.78rem; color:var(--ink-dim); margin-left:0.5em; }}
-  .warn-item {{ list-style:none; margin:0.3rem 0 0.3rem -1.1rem; padding:0.35rem 0.6rem; border-radius:5px; }}
-  .warn-item.warning {{ background:var(--warn-bg); color:var(--warn); }}
-  .warn-item.error {{ background:var(--err-bg); color:var(--err); }}
-  .warn-code {{ font-weight:700; margin-right:0.5em; }}
-  .claims {{ margin-top:0.7rem; font-size:0.87rem; }}
-  .claims-head {{ font-weight:700; margin-bottom:0.3rem; }}
-  .claims ul {{ margin:0; padding-left:0; }}
-  .claim-item {{ list-style:none; padding:0.35rem 0.5rem; margin:0.25rem 0; border-radius:5px; background:var(--bg); }}
-  .claim-icon {{ margin-right:0.4em; }}
-  .claim-verdict {{ color:var(--ink-dim); font-size:0.8rem; margin-left:0.6em; }}
-  .claim-date {{ color:var(--ink-dim); font-size:0.75rem; margin-left:0.6em; }}
-  .claim-item.v-contradicted {{ background:var(--err-bg); }}
-  .claim-item details {{ margin-top:0.3rem; font-size:0.82rem; color:var(--ink-dim); }}
-  .evidence blockquote {{ margin:0.2rem 0 0.4rem 0.8rem; padding-left:0.6rem; border-left:2px solid var(--line); }}
-  .disclaimer {{
+    padding:0.9rem 1.2rem; margin-bottom:1rem; font-size:0.85rem;
+  }
+  .change-head { font-weight:700; color:var(--accent); }
+  .change-block ul { margin:0.5rem 0 0; padding-left:1.2rem; }
+  .change-deltas { margin-top:0.4rem; color:var(--ink-dim); }
+  .day-card {
+    background:var(--surface); border:1px solid var(--line); border-radius:10px;
+    padding:0.9rem 1.1rem; margin-bottom:0.8rem; cursor:pointer;
+    transition:border-color 0.15s, box-shadow 0.15s;
+  }
+  .day-card.active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+  .day-head { display:flex; align-items:baseline; gap:0.6em; }
+  .day-idx { font-weight:700; color:var(--accent); font-size:1.02rem; }
+  .day-date { color:var(--ink-dim); font-size:0.82rem; }
+  .day-route-title { font-weight:600; font-size:0.92rem; margin:0.35rem 0 0.2rem; }
+  .elev-chain {
+    display:inline-block; background:var(--chain-bg); color:var(--chain-ink);
+    font-size:0.78rem; padding:0.1em 0.6em; border-radius:4px; margin:0.2rem 0;
+  }
+  .drive-line { display:flex; justify-content:space-between; align-items:baseline;
+                font-size:0.9rem; margin:0.25rem 0; }
+  .drive-label { color:var(--ink-dim); font-size:0.8rem; }
+  .day-note { font-size:0.83rem; color:var(--ink-dim); margin:0.3rem 0; }
+  .segment { margin:0.5rem 0; font-size:0.9rem; }
+  .place { display:flex; gap:0.5em; align-items:center; flex-wrap:wrap; }
+  .place-label { color:var(--ink-dim); font-size:0.76rem; min-width:2.4em; }
+  .badge { font-size:0.68rem; padding:0.05em 0.5em; border-radius:3px; }
+  .badge.unverified { background:var(--unverified-bg); color:var(--unverified-ink); }
+  .badge.pinned { background:var(--pin-bg); color:var(--pin-ink); }
+  .badge.fidelity { margin-left:auto; font-weight:600; }
+  .badge.risk { font-weight:700; }
+  .risk-low { background:var(--chain-bg); color:var(--chain-ink); }
+  .risk-mid { background:var(--warn-bg); color:var(--warn); }
+  .risk-high { background:var(--err-bg); color:var(--err); }
+  .fid-skeleton { background:var(--unverified-bg); color:var(--unverified-ink); }
+  .fid-filled { background:var(--pin-bg); color:var(--pin-ink); }
+  .fid-verified { background:var(--accent); color:var(--surface); }
+  ul.stops, ul.warnings { margin:0.5rem 0 0; padding-left:1.1rem; font-size:0.86rem; }
+  ul.stops li { margin:0.28rem 0; }
+  .advisory { font-size:0.78rem; color:var(--ink-dim); margin-left:0.5em; }
+  .warn-item { list-style:none; margin:0.3rem 0 0.3rem -1.1rem; padding:0.35rem 0.6rem; border-radius:5px; }
+  .warn-item.warning { background:var(--warn-bg); color:var(--warn); }
+  .warn-item.error { background:var(--err-bg); color:var(--err); }
+  .warn-code { font-weight:700; margin-right:0.5em; }
+  .claims { margin-top:0.6rem; font-size:0.85rem; }
+  .claims-head { font-weight:700; margin-bottom:0.3rem; }
+  .claims ul { margin:0; padding-left:0; }
+  .claim-item { list-style:none; padding:0.35rem 0.5rem; margin:0.25rem 0; border-radius:5px; background:var(--bg); }
+  .claim-icon { margin-right:0.4em; }
+  .claim-verdict { color:var(--ink-dim); font-size:0.8rem; margin-left:0.6em; }
+  .claim-date { color:var(--ink-dim); font-size:0.75rem; margin-left:0.6em; }
+  .claim-item.v-contradicted { background:var(--err-bg); }
+  .claim-item details { margin-top:0.3rem; font-size:0.82rem; color:var(--ink-dim); }
+  .evidence blockquote { margin:0.2rem 0 0.4rem 0.8rem; padding-left:0.6rem; border-left:2px solid var(--line); }
+  .disclaimer {
     font-size:0.8rem; color:var(--ink-dim); background:var(--unverified-bg);
-    padding:0.8rem 1rem; border-radius:6px; margin-bottom:1.5rem;
-  }}
+    padding:0.8rem 1rem; border-radius:6px; margin-bottom:1rem;
+  }
+  .poi-icon { font-size:18px; line-height:1; text-shadow:0 0 3px #fff, 0 0 3px #fff; }
 </style>
 </head>
 <body>
-{preview_banner}
-<div class="wrap">
-  <h1>{title}</h1>
-  {disclaimer}
-  <div id="map"></div>
+%%PREVIEW_BANNER%%
+<div class="layout">
+<div id="sidebar">
+  <h1>%%TITLE%%</h1>
+  %%DISCLAIMER%%
   <div class="summary">
-    <span>总里程 <b>{total_km} km</b></span>
-    <span>总驾驶 <b>{total_hours} 小时</b></span>
-    <span>最高海拔 <b>{max_elev}</b></span>
-    <span>警告 <b>{warning_count} 条</b></span>
-    <span>Plan B <b>{has_plan_b}</b></span>
+    <span>总里程 <b>%%TOTAL_KM%% km</b></span>
+    <span>总驾驶 <b>%%TOTAL_HOURS%% 小时</b></span>
+    <span>最高海拔 <b>%%MAX_ELEV%%</b></span>
+    <span>警告 <b>%%WARNING_COUNT%% 条</b></span>
+    <span>Plan B <b>%%HAS_PLAN_B%%</b></span>
   </div>
-  {change_block}
-  {trip_claims}
-  {days_html}
+  %%CHANGE_BLOCK%%
+  %%TRIP_CLAIMS%%
+  %%DAYS_HTML%%
+</div>
+<div id="map"></div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"
         onerror="document.documentElement.classList.add('no-map')"></script>
 <script>
-(function () {{
-  var DAYS = {map_days_json};
-  if (!window.L || !DAYS.length) {{
+(function () {
+  var DAYS = %%MAP_DAYS_JSON%%;
+  if (!window.L || !DAYS.length) {
     document.documentElement.classList.add('no-map');
     return;
-  }}
+  }
+  var ICONS = { hotel: '🏨', scenic: '⭐', rest: '⛽' };
   var map = L.map('map');
-  L.tileLayer('https://webrd0{{s}}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={{x}}&y={{y}}&z={{z}}', {{
+  L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
     subdomains: ['1', '2', '3', '4'], maxZoom: 18, attribution: '© 高德地图'
-  }}).addTo(map);
-  var all = [];
-  DAYS.forEach(function (d) {{
-    d.points.forEach(function (p) {{ all.push(p); }});
-    if (d.points.length > 1) {{
-      L.polyline(d.points, {{ color: d.color, weight: 3, opacity: 0.85 }})
-        .bindTooltip('DAY ' + d.idx).addTo(map)
-        .on('click', function () {{
-          var el = document.getElementById('day-' + d.idx);
-          if (el) el.scrollIntoView({{ behavior: 'smooth' }});
-        }});
-    }}
-    if (d.overnight) {{
-      L.circleMarker(d.overnight.latlng, {{
-        radius: 6, color: d.color, fillColor: d.color, fillOpacity: 0.9
-      }}).bindTooltip('D' + d.idx + ' 过夜：' + d.overnight.name).addTo(map);
-    }}
-  }});
-  if (all.length) map.fitBounds(all, {{ padding: [24, 24] }});
-}})();
+  }).addTo(map);
+
+  var all = [], layers = {}, selected = null;
+
+  DAYS.forEach(function (d) {
+    var group = L.layerGroup().addTo(map);
+    d.segs.forEach(function (s) {
+      s.pts.forEach(function (p) { all.push(p); });
+      L.polyline(s.pts, {
+        color: d.color, weight: 4, opacity: 0.8,
+        dashArray: s.real ? null : '6 8'
+      }).bindTooltip('D' + d.idx + (s.real ? '' : '（直连示意，非真实路线）'))
+        .on('click', function () { selectDay(d.idx, true); })
+        .addTo(group);
+    });
+    d.markers.forEach(function (m) {
+      L.marker(m.ll, {
+        icon: L.divIcon({ className: 'poi-icon', html: ICONS[m.t] || '📍', iconSize: [20, 20], iconAnchor: [10, 10] })
+      }).bindPopup('<b>' + m.name + '</b><br>' + m.desc).addTo(group);
+      all.push(m.ll);
+    });
+    layers[d.idx] = { group: group, color: d.color };
+  });
+
+  function setDim(idx, dim) {
+    var l = layers[idx];
+    if (!l) return;
+    l.group.eachLayer(function (layer) {
+      if (layer.setStyle) layer.setStyle({ opacity: dim ? 0.25 : 0.8, weight: dim ? 3 : 4 });
+      if (layer.setOpacity) layer.setOpacity(dim ? 0.35 : 1);
+    });
+  }
+
+  function selectDay(idx, scrollCard) {
+    if (selected === idx) {  // 再点一次取消选中
+      Object.keys(layers).forEach(function (k) { setDim(k, false); });
+      document.querySelectorAll('.day-card.active').forEach(function (el) { el.classList.remove('active'); });
+      selected = null;
+      return;
+    }
+    selected = idx;
+    Object.keys(layers).forEach(function (k) { setDim(k, String(k) !== String(idx)); });
+    document.querySelectorAll('.day-card.active').forEach(function (el) { el.classList.remove('active'); });
+    var card = document.getElementById('day-' + idx);
+    if (card) {
+      card.classList.add('active');
+      if (scrollCard) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    var pts = [];
+    var d = DAYS.find(function (x) { return String(x.idx) === String(idx); });
+    if (d) {
+      d.segs.forEach(function (s) { pts = pts.concat(s.pts); });
+      d.markers.forEach(function (m) { pts.push(m.ll); });
+      if (pts.length) map.fitBounds(pts, { padding: [40, 40] });
+    }
+  }
+
+  document.querySelectorAll('.day-card').forEach(function (card) {
+    card.addEventListener('click', function (e) {
+      if (e.target.closest('details, a')) return;
+      selectDay(card.getAttribute('data-day'), false);
+    });
+  });
+
+  if (all.length) map.fitBounds(all, { padding: [24, 24] });
+})();
 </script>
 </body>
 </html>"""
@@ -363,7 +497,7 @@ def main():
     PREVIEW_MODE = bool(meta.get("preview_mode"))
 
     preview_banner = ""
-    if meta.get("preview_mode"):
+    if PREVIEW_MODE:
         preview_banner = ('<div class="preview-banner">⚠ 预览模式：路耗为估算值，'
                           '偏远路段可能偏差数小时，不可直接照此出行。配置高德后可生成可执行版。</div>')
 
@@ -375,22 +509,23 @@ def main():
             f'出行前请自行确认坐标、路况与海拔信息。</div>'
         )
 
-    days_html = "".join(render_day(d) for d in itinerary.get("days", []))
-
-    out_html = TEMPLATE.format(
-        title=esc(meta.get("title", "自驾行程")),
-        preview_banner=preview_banner,
-        disclaimer=disclaimer,
-        total_km=summary["total_distance_km"],
-        total_hours=summary["total_drive_hours"],
-        max_elev=(f'{summary["max_elevation_m"]:.0f}m' if summary["max_elevation_m"] is not None else "未知"),
-        warning_count=summary["warning_count"],
-        has_plan_b="有" if summary["has_plan_b"] else "无",
-        change_block=render_change_block(itinerary),
-        trip_claims=render_claims(itinerary.get("claims"), "全程核验项"),
-        days_html=days_html,
-        map_days_json=json.dumps(collect_map_days(itinerary), ensure_ascii=False),
-    )
+    replacements = {
+        "%%TITLE%%": esc(meta.get("title", "自驾行程")),
+        "%%PREVIEW_BANNER%%": preview_banner,
+        "%%DISCLAIMER%%": disclaimer,
+        "%%TOTAL_KM%%": str(summary["total_distance_km"]),
+        "%%TOTAL_HOURS%%": str(summary["total_drive_hours"]),
+        "%%MAX_ELEV%%": (f'{summary["max_elevation_m"]:.0f}m' if summary["max_elevation_m"] is not None else "未知"),
+        "%%WARNING_COUNT%%": str(summary["warning_count"]),
+        "%%HAS_PLAN_B%%": "有" if summary["has_plan_b"] else "无",
+        "%%CHANGE_BLOCK%%": render_change_block(itinerary),
+        "%%TRIP_CLAIMS%%": render_claims(itinerary.get("claims"), "全程核验项"),
+        "%%DAYS_HTML%%": "".join(render_day(d) for d in itinerary.get("days", [])),
+        "%%MAP_DAYS_JSON%%": json.dumps(collect_map_days(itinerary), ensure_ascii=False, separators=(",", ":")),
+    }
+    out_html = TEMPLATE
+    for k, v in replacements.items():
+        out_html = out_html.replace(k, v)
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)

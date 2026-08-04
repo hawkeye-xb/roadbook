@@ -37,6 +37,11 @@
                 "to": { "$ref": "#/definitions/place" },
                 "distance_km": { "type": "number" },
                 "duration_min": { "type": "number" },
+                "geometry": {
+                  "type": "array",
+                  "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+                  "description": "真实道路几何 [lng,lat] 点列，fetch_geometry.py 写入（抽稀后）；量大，模型不要读写此字段"
+                },
                 "roads": { "type": "array", "items": { "type": "string" } },
                 "refuel_points": {
                   "type": "array",
