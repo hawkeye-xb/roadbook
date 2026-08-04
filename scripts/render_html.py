@@ -163,6 +163,16 @@ def render_day(day):
     ov_html = place_line(ov, "过夜") if ov else ""
     note_html = f'<div class="day-note">{esc(day.get("note"))}</div>' if day.get("note") else ""
 
+    # 信息密度分级：温度/穿衣/拍摄/美食这类建议折叠，顶层不堆内容
+    tips = day.get("tips") or {}
+    tips_html = ""
+    if tips:
+        sections = "".join(
+            f'<div class="detail-section"><div class="detail-label">{esc(k)}</div>'
+            f'<div class="detail-content">{esc(v)}</div></div>'
+            for k, v in tips.items())
+        tips_html = f'<details class="day-detail"><summary>当日建议（{len(tips)} 项）</summary>{sections}</details>'
+
     fid_label, fid_cls = FIDELITY_LABELS.get(day.get("fidelity", "skeleton"), FIDELITY_LABELS["skeleton"])
     risk_label, risk_cls = RISK_LABELS[day_risk(day)]
 
@@ -178,6 +188,7 @@ def render_day(day):
       {chain_html}
       {drive_html}
       {note_html}
+      {tips_html}
       {'<ul class="stops">' + stops_html + '</ul>' if stops_html else ''}
       {ov_html}
       {render_claims(day.get("claims"))}
@@ -225,10 +236,11 @@ def collect_map_days(itinerary):
             geom = seg.get("geometry")
             o = (seg.get("from") or {}).get("lnglat")
             d = (seg.get("to") or {}).get("lnglat")
+            special = seg.get("special")
             if geom and len(geom) > 1:
-                segs_js.append({"pts": [to_latlng(p) for p in geom], "real": True})
+                segs_js.append({"pts": [to_latlng(p) for p in geom], "real": True, "sp": special})
             elif o and d:
-                segs_js.append({"pts": [to_latlng(o), to_latlng(d)], "real": False})
+                segs_js.append({"pts": [to_latlng(o), to_latlng(d)], "real": False, "sp": special})
             for rp in seg.get("refuel_points", []) or []:
                 if rp.get("lnglat"):
                     markers.append({"t": "rest", "ll": to_latlng(rp["lnglat"]),
@@ -244,13 +256,14 @@ def collect_map_days(itinerary):
                 for a in stop.get("advisories", []) or []:
                     desc_bits.append(str(a))
                 markers.append({"t": "scenic", "ll": to_latlng(stop["lnglat"]),
-                                "name": stop.get("name", ""), "desc": " · ".join(desc_bits)})
+                                "name": stop.get("name", ""), "desc": " · ".join(desc_bits),
+                                "wx": stop.get("weather")})
 
         ov = day.get("overnight") or {}
         if ov.get("lnglat"):
             desc = f"D{day.get('day_index')} 过夜" + (f" · 海拔 {ov['elevation_m']:.0f}m" if ov.get("elevation_m") is not None else "")
             markers.append({"t": "hotel", "ll": to_latlng(ov["lnglat"]),
-                            "name": ov.get("name", ""), "desc": desc})
+                            "name": ov.get("name", ""), "desc": desc, "wx": ov.get("weather")})
 
         if not segs_js and not markers:
             continue
@@ -370,6 +383,13 @@ TEMPLATE = """<!doctype html>
     padding:0.8rem 1rem; border-radius:6px; margin-bottom:1rem;
   }
   .poi-icon { font-size:18px; line-height:1; text-shadow:0 0 3px #fff, 0 0 3px #fff; }
+  .day-detail { margin:0.4rem 0; font-size:0.85rem; }
+  .day-detail summary { color:var(--ink-dim); cursor:pointer; }
+  .detail-section { margin:0.5rem 0 0 0.2rem; }
+  .detail-label { font-size:0.72rem; font-weight:700; letter-spacing:0.08em; color:var(--ink-dim); }
+  .detail-content { margin-top:0.15rem; line-height:1.5; }
+  .popup-wx { margin-top:0.4rem; padding:0.3rem 0.5rem; background:#0d2137; color:#cfe3f5; border-radius:4px; font-size:0.82rem; }
+  .popup-slot { margin-top:0.3rem; padding:0.25rem 0.5rem; border:1px dashed #aaa; border-radius:4px; color:#888; font-size:0.78rem; }
 </style>
 </head>
 <body>
@@ -413,16 +433,19 @@ TEMPLATE = """<!doctype html>
     d.segs.forEach(function (s) {
       s.pts.forEach(function (p) { all.push(p); });
       L.polyline(s.pts, {
-        color: d.color, weight: 4, opacity: 0.8,
+        color: s.sp ? '#3b82f6' : d.color, weight: 4, opacity: 0.8,
         dashArray: s.real ? null : '6 8'
-      }).bindTooltip('D' + d.idx + (s.real ? '' : '（直连示意，非真实路线）'))
+      }).bindTooltip('D' + d.idx + (s.sp ? ' · 📍' + s.sp : '') + (s.real ? '' : '（直连示意，非真实路线）'))
         .on('click', function () { selectDay(d.idx, true); })
         .addTo(group);
     });
     d.markers.forEach(function (m) {
+      var html = '<b>' + m.name + '</b><br>' + m.desc;
+      if (m.wx) html += '<div class="popup-wx">🌤 ' + m.wx + '</div>';
+      html += '<div class="popup-slot">📸 照片 — 待添加</div><div class="popup-slot">📝 笔记 — 待补充</div>';
       L.marker(m.ll, {
         icon: L.divIcon({ className: 'poi-icon', html: ICONS[m.t] || '📍', iconSize: [20, 20], iconAnchor: [10, 10] })
-      }).bindPopup('<b>' + m.name + '</b><br>' + m.desc).addTo(group);
+      }).bindPopup(html).addTo(group);
       all.push(m.ll);
     });
     layers[d.idx] = { group: group, color: d.color };

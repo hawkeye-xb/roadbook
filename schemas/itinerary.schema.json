@@ -23,6 +23,12 @@
         "properties": {
           "day_index": { "type": "integer" },
           "date": { "type": "string" },
+          "note": { "type": "string", "description": "当日一句话备注，卡片顶层显示" },
+          "tips": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "折叠展示的当日建议，键即标签（如 温度/穿衣/拍摄/美食），值为文本"
+          },
           "fidelity": {
             "type": "string",
             "enum": ["skeleton", "filled", "verified"],
@@ -42,6 +48,7 @@
                   "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
                   "description": "真实道路几何 [lng,lat] 点列，fetch_geometry.py 写入（抽稀后）；量大，模型不要读写此字段"
                 },
+                "special": { "type": "string", "description": "特殊路段名（如某风景公路），地图上独立配色并在 tooltip 标注" },
                 "roads": { "type": "array", "items": { "type": "string" } },
                 "refuel_points": {
                   "type": "array",
@@ -120,7 +127,8 @@
           "enum": ["amap", "doc_claim", "llm_guess", "unverified"],
           "description": "amap=高德核验；doc_claim=来自用户攻略原文；llm_guess=模型构思未核验；unverified=其他未核验"
         },
-        "pinned": { "type": "boolean", "description": "用户确认过的元素，非用户明说不改动" }
+        "pinned": { "type": "boolean", "description": "用户确认过的元素，非用户明说不改动" },
+        "weather": { "type": "string", "description": "该点即时/预报天气一句话（与 day.tips 的温度建议是两回事），POI 弹窗展示" }
       }
     },
     "claim": {

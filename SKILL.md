@@ -71,7 +71,9 @@ description: 自驾路书流水线：输入旅行需求或既有攻略（文档/
 
 对每一天：沿途/目的地发现景点和动线，构思游玩顺序。信息分两级：
 
-- **落实项**：景点、进出门/换乘动线、当日行车段——写入 `days[].stops/segments`，坐标经 `maps_geo`/`maps_text_search` 核验（`source: "amap"`），相邻点间 `maps_direction_driving` 取真实路耗，换算 km/分钟写入。
+- **落实项**：景点、进出门/换乘动线、当日行车段——写入 `days[].stops/segments`，坐标核验后标 `source: "amap"`，相邻点间 `maps_direction_driving` 取真实路耗，换算 km/分钟写入。
+
+**坐标三步验证铁律**：城市/县城可以直接 `maps_geo`；但**路名、路口、驿站、观景台这类非行政地名，禁止裸用 `maps_geo`**——它会返回所在城市质心（实测案例："乌苏驿"被落到乌苏市中心，偏 10km）。必须三步：`maps_text_search` 找候选 → 核对详情确认是目标 POI → 用该坐标跑一次 `maps_direction_driving` 验证路耗量级合理。差 10km 的坐标会让整段路耗和地图连线都错。
 - **留白项**：吃饭、零食补给、顺路可去可不去的小点——标 `advisories` 里"自由安排"，不阻塞。
 
 长距离段用 `maps_around_search`（关键词"加油站"/"充电站"）沿途分段查补能点。海拔跑 `python3 scripts/enrich.py --input work/itinerary.json` 批量补（Open-Elevation 免费，大陆坐标几十米误差正常）。天气工具只覆盖未来 3-4 天，超窗口不填。
@@ -106,6 +108,13 @@ description: 自驾路书流水线：输入旅行需求或既有攻略（文档/
 ## L4 微调与行前复检
 
 - **微调**：用户提改动 → 按行程结构（不是凭感觉）说清波及范围（换第 3 天过夜点，第 4 天出发点必然变）→ 确认后只改受影响的 `days[]` 对象和 claim → 受影响部分重跑 L3 两条腿 → 重新渲染。`pinned` 的元素非用户明说不动。
+- **路上改标准流程**（旅途中用户在赶路，每步都要快）：
+  1. 解析消息：哪天 / 什么动作（加途经点、改路线、删 POI）/ 哪个地方；
+  2. 新地名走**三步验证**（见 L2 铁律，路上改最常在这一步翻车）；
+  3. **途经点方向核对**：新途经点应大致落在该段起终点之间——加"高速入口"这类点时尤其要查，装反方向等于绕路（实测案例：往东走的段加了西边的高速出口）；
+  4. **只重算受影响段**：改 D6 就只重取 D6 相关 segments 的路耗和几何，不整天重算更不全程重算；
+  5. 删 POI 要全链清理：stops 里的对象、受影响 segments 的合并、当日 km/h 重算、claims 里的引用；
+  6. 重跑校验 → 重渲染 → 回复里给出**新段的 km/h 变化**让用户确认。
 - **版本对比**：每轮微调后跑 `python3 scripts/diff_itinerary.py --old work/itinerary.prev.json --new work/itinerary.json`（改前先 `cp` 一份 prev），输出给渲染的"本次变更"块：哪几天动了、总里程/时长增减、警告增减。
 - **行前复检**：出发前用户说"再查一遍"→ `python3 scripts/check_freshness.py --input work/itinerary.json`，超时效窗口的 claim 降级 `stale`，只对 stale 项重新检索，不全量重跑。
 
@@ -116,7 +125,9 @@ python3 scripts/render_html.py --input work/itinerary.json --out outputs/<行程
 python3 scripts/summarize.py --input work/itinerary.json
 ```
 
-产物是自包含单 HTML（Leaflet 地图 + 逐日卡片），手机可看、可直接发微信给同行人。每天卡片带分辨率徽章（骨架/已填充/已核验），claims 带 ✅❓❌，预览模式有顶部横幅。交付时用 `summarize.py` 输出组织五项摘要：总里程、总驾驶时长、最高海拔、警告数、Plan B 有无，末尾加"想调整哪天直接说"。
+产物是自包含单 HTML（Leaflet 地图 + 逐日卡片），**用户双击本地文件就能在浏览器打开**，手机可看、可直接发微信给同行人——这就是交付标准，不预设用户有任何技术能力。每天卡片带分辨率徽章（骨架/已填充/已核验），claims 带 ✅❓❌，预览模式有顶部横幅。交付时用 `summarize.py` 输出组织五项摘要：总里程、总驾驶时长、最高海拔、警告数、Plan B 有无，末尾加"想调整哪天直接说"。
+
+可选：若当前环境恰好有网页部署能力（如独立的 deploy skill），可以额外发布为 URL 方便分享；没有就不提，本地文件即完整交付。
 
 ## 目录
 
