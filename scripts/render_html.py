@@ -43,9 +43,9 @@ VERDICT_ICONS = {
     "stale": ("⏳", "信息可能过期，建议复检"),
 }
 
-DAY_COLORS = ["#2f6f63", "#b3541e", "#4a6fa5", "#8c4f66", "#6b5b95", "#3d8361",
-              "#a5702a", "#39648c", "#a5432e", "#5c7a29", "#7a5b8c", "#2a7f8c"]
-COLOR_ROUGH = "#8f1d1d"
+COLOR_ROUTE = "#16a34a"   # 统一绿色（近高德导航色），不按天染色
+COLOR_ROUGH = "#8f1d1d"   # 风险日（error 级警告/季节性道路）
+COLOR_SPECIAL = "#3b82f6" # 特殊路段（segment.special）
 
 PREVIEW_MODE = False  # main() 里按 meta.preview_mode 设置
 
@@ -239,9 +239,9 @@ def to_latlng(lnglat):
 def collect_map_days(itinerary):
     """每天：分段几何（真实/直连）、分类标记。geometry 存 [lng,lat]，此处翻成 Leaflet 的 [lat,lng]。"""
     map_days = []
-    for i, day in enumerate(itinerary.get("days", [])):
+    for day in itinerary.get("days", []):
         risk = day_risk(day)
-        color = COLOR_ROUGH if risk == "high" else DAY_COLORS[i % len(DAY_COLORS)]
+        color = COLOR_ROUGH if risk == "high" else COLOR_ROUTE
         segs_js, markers = [], []
 
         for seg in day.get("segments", []):
@@ -447,12 +447,14 @@ TEMPLATE = """<!doctype html>
     var group = L.layerGroup().addTo(map);
     d.segs.forEach(function (s) {
       s.pts.forEach(function (p) { all.push(p); });
-      L.polyline(s.pts, {
-        color: s.sp ? '#3b82f6' : d.color, weight: 4, opacity: 0.8,
+      var base = s.sp ? '#3b82f6' : d.color;
+      var line = L.polyline(s.pts, {
+        color: base, weight: 4, opacity: 0.85,
         dashArray: s.real ? null : '6 8'
       }).bindTooltip('D' + d.idx + (s.sp ? ' · 📍' + s.sp : '') + (s.real ? '' : '（直连示意，非真实路线）'))
         .on('click', function () { selectDay(d.idx, true); })
         .addTo(group);
+      line._base = base;
     });
     d.markers.forEach(function (m) {
       var html = '<b>' + m.name + '</b><br>' + m.desc;
@@ -466,24 +468,29 @@ TEMPLATE = """<!doctype html>
     layers[d.idx] = { group: group, color: d.color };
   });
 
-  function setDim(idx, dim) {
+  function setDim(idx, state) {
+    // state: 'normal' | 'dim' | 'active' —— 三态配色：常态绿 / 未选中淡化 / 选中加粗
     var l = layers[idx];
     if (!l) return;
     l.group.eachLayer(function (layer) {
-      if (layer.setStyle) layer.setStyle({ opacity: dim ? 0.25 : 0.8, weight: dim ? 3 : 4 });
-      if (layer.setOpacity) layer.setOpacity(dim ? 0.35 : 1);
+      if (layer.setStyle) {
+        if (state === 'dim') layer.setStyle({ opacity: 0.2, weight: 3 });
+        else if (state === 'active') layer.setStyle({ color: layer._base, opacity: 0.95, weight: 6 });
+        else layer.setStyle({ color: layer._base, opacity: 0.85, weight: 4 });
+      }
+      if (layer.setOpacity) layer.setOpacity(state === 'dim' ? 0.35 : 1);
     });
   }
 
   function selectDay(idx, scrollCard) {
     if (selected === idx) {  // 再点一次取消选中
-      Object.keys(layers).forEach(function (k) { setDim(k, false); });
+      Object.keys(layers).forEach(function (k) { setDim(k, 'normal'); });
       document.querySelectorAll('.day-card.active').forEach(function (el) { el.classList.remove('active'); });
       selected = null;
       return;
     }
     selected = idx;
-    Object.keys(layers).forEach(function (k) { setDim(k, String(k) !== String(idx)); });
+    Object.keys(layers).forEach(function (k) { setDim(k, String(k) !== String(idx) ? 'dim' : 'active'); });
     document.querySelectorAll('.day-card.active').forEach(function (el) { el.classList.remove('active'); });
     var card = document.getElementById('day-' + idx);
     if (card) {
