@@ -50,6 +50,16 @@ L4 refinement   (touch only affected days; visual diff; one-command pre-departur
 
 Single source of truth: `work/itinerary.json`. The HTML is always a projection of it.
 
+## Version & updates
+
+Current version lives in the `VERSION` file (semver). To update:
+
+```bash
+cd ~/.claude/skills/roadbook && git pull
+```
+
+Updates take effect in new sessions. Your trip data stays in your own `work/` directory — updating the skill never touches generated road books.
+
 ## Known limits
 
 - Road network data currently AMap only (mainland China);
