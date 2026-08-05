@@ -50,6 +50,11 @@
     },
     "must_visit": { "type": "array", "items": { "type": "string" } },
     "must_avoid": { "type": "array", "items": { "type": "string" } },
-    "overnight_altitude_cap_m": { "type": ["number", "null"], "default": null }
+    "overnight_altitude_cap_m": { "type": ["number", "null"], "default": null },
+    "altitude_relevant": {
+      "type": "boolean",
+      "default": true,
+      "description": "目的地是否涉及山地/高原。低地行程（东北/东南沿海等）设 false：不问高反、不跑 enrich 海拔、校验跳过海拔类规则、渲染隐藏海拔"
+    }
   }
 }

@@ -48,6 +48,7 @@ COLOR_ROUGH = "#8f1d1d"   # 风险日（error 级警告/季节性道路）
 COLOR_SPECIAL = "#3b82f6" # 特殊路段（segment.special）
 
 PREVIEW_MODE = False  # main() 里按 meta.preview_mode 设置
+ALT_RELEVANT = True   # main() 里按行程数据判定：全程无 1500m+ 海拔（如东北/东南沿海）则隐藏海拔展示
 
 
 def esc(s):
@@ -66,6 +67,8 @@ def day_risk(day):
 
 def elevation_chain(day):
     """起点→途经→过夜的海拔链，如 800m → 1900m → 800m。缺数据的点跳过。"""
+    if not ALT_RELEVANT:
+        return ""
     elevs = []
     segs = day.get("segments", [])
     if segs:
@@ -95,7 +98,7 @@ def place_line(place, label):
         src_badge = "" if PREVIEW_MODE else '<span class="badge unverified">未核验</span>'
     pin_badge = '<span class="badge pinned">已钉</span>' if place.get("pinned") else ""
     elev = place.get("elevation_m")
-    elev_txt = f' · 海拔 {elev:.0f}m' if elev is not None else ""
+    elev_txt = f' · 海拔 {elev:.0f}m' if elev is not None and ALT_RELEVANT else ""
     return (f'<div class="place"><span class="place-label">{esc(label)}</span> '
             f'{esc(place.get("name", ""))}{src_badge}{pin_badge}{elev_txt}</div>')
 
@@ -290,7 +293,7 @@ def collect_map_days(itinerary):
                 desc_bits = [f"D{day.get('day_index')} 途经"]
                 if stop.get("visit_min"):
                     desc_bits.append(f"游玩约 {stop['visit_min']} 分钟")
-                if stop.get("elevation_m") is not None:
+                if stop.get("elevation_m") is not None and ALT_RELEVANT:
                     desc_bits.append(f"海拔 {stop['elevation_m']:.0f}m")
                 for a in stop.get("advisories", []) or []:
                     desc_bits.append(str(a))
@@ -300,7 +303,7 @@ def collect_map_days(itinerary):
 
         ov = day.get("overnight") or {}
         if ov.get("lnglat"):
-            desc = f"D{day.get('day_index')} 过夜" + (f" · 海拔 {ov['elevation_m']:.0f}m" if ov.get("elevation_m") is not None else "")
+            desc = f"D{day.get('day_index')} 过夜" + (f" · 海拔 {ov['elevation_m']:.0f}m" if ov.get("elevation_m") is not None and ALT_RELEVANT else "")
             markers.append({"t": "hotel", "ll": to_latlng(ov["lnglat"]),
                             "name": ov.get("name", ""), "desc": desc, "wx": ov.get("weather")})
 
@@ -441,6 +444,11 @@ TEMPLATE = """<!doctype html>
     padding:0.8rem 1rem; border-radius:6px; margin-bottom:1rem;
   }
   .poi-icon { font-size:18px; line-height:1; text-shadow:0 0 3px #fff, 0 0 3px #fff; }
+  .map-overview-btn {
+    background:#fff; color:#333; border:2px solid rgba(0,0,0,0.2); border-radius:4px;
+    padding:0.3rem 0.6rem; font-size:0.82rem; font-weight:600; cursor:pointer;
+  }
+  .map-overview-btn:hover { background:#f4f4f4; }
   .day-detail { margin:0.4rem 0; font-size:0.85rem; }
   .day-detail summary { color:var(--ink-dim); cursor:pointer; }
   .detail-section { margin:0.5rem 0 0 0.2rem; }
@@ -459,8 +467,7 @@ TEMPLATE = """<!doctype html>
   <div class="summary">
     <span>总里程 <b>%%TOTAL_KM%% km</b></span>
     <span>总驾驶 <b>%%TOTAL_HOURS%% 小时</b></span>
-    <span>最高海拔 <b>%%MAX_ELEV%%</b></span>
-    <span>警告 <b>%%WARNING_COUNT%% 条</b></span>
+%%ELEV_SPAN%%    <span>警告 <b>%%WARNING_COUNT%% 条</b></span>
     <span>Plan B <b>%%HAS_PLAN_B%%</b></span>
   </div>
   %%CHANGE_BLOCK%%
@@ -526,11 +533,16 @@ TEMPLATE = """<!doctype html>
     });
   }
 
+  function overview() {  // 回到全览：清除选中并恢复全程视野
+    Object.keys(layers).forEach(function (k) { setDim(k, 'normal'); });
+    document.querySelectorAll('.day-card.active').forEach(function (el) { el.classList.remove('active'); });
+    selected = null;
+    if (all.length) map.fitBounds(all, { padding: [24, 24] });
+  }
+
   function selectDay(idx, scrollCard) {
-    if (selected === idx) {  // 再点一次取消选中
-      Object.keys(layers).forEach(function (k) { setDim(k, 'normal'); });
-      document.querySelectorAll('.day-card.active').forEach(function (el) { el.classList.remove('active'); });
-      selected = null;
+    if (selected === idx) {  // 再点一次取消选中 → 回全览
+      overview();
       return;
     }
     selected = idx;
@@ -556,6 +568,20 @@ TEMPLATE = """<!doctype html>
       selectDay(card.getAttribute('data-day'), false);
     });
   });
+
+  // 地图左上角常驻"全览"按钮：任何状态下一键回到全程视野
+  var OverviewCtl = L.Control.extend({
+    options: { position: 'topleft' },
+    onAdd: function () {
+      var btn = L.DomUtil.create('button', 'map-overview-btn');
+      btn.type = 'button';
+      btn.innerHTML = '⤢ 全览';
+      L.DomEvent.disableClickPropagation(btn);
+      btn.addEventListener('click', overview);
+      return btn;
+    }
+  });
+  map.addControl(new OverviewCtl());
 
   if (all.length) map.fitBounds(all, { padding: [24, 24] });
 
@@ -592,8 +618,12 @@ def main():
 
     meta = itinerary.get("meta", {})
 
-    global PREVIEW_MODE
+    global PREVIEW_MODE, ALT_RELEVANT
     PREVIEW_MODE = bool(meta.get("preview_mode"))
+    # 全程无 1500m+ 海拔（东北/东南沿海等）→ 海拔信息无意义，整体隐藏
+    all_elevs = [p.get("elevation_m") for d in itinerary.get("days", [])
+                 for p in ([d.get("overnight")] + d.get("stops", [])) if p and p.get("elevation_m") is not None]
+    ALT_RELEVANT = bool(all_elevs) and max(all_elevs) >= 1500
 
     preview_banner = ""
     if PREVIEW_MODE:
@@ -614,7 +644,8 @@ def main():
         "%%DISCLAIMER%%": disclaimer,
         "%%TOTAL_KM%%": str(summary["total_distance_km"]),
         "%%TOTAL_HOURS%%": str(summary["total_drive_hours"]),
-        "%%MAX_ELEV%%": (f'{summary["max_elevation_m"]:.0f}m' if summary["max_elevation_m"] is not None else "未知"),
+        "%%ELEV_SPAN%%": (f'    <span>最高海拔 <b>{summary["max_elevation_m"]:.0f}m</b></span>\n'
+                          if ALT_RELEVANT and summary["max_elevation_m"] is not None else ""),
         "%%WARNING_COUNT%%": str(summary["warning_count"]),
         "%%HAS_PLAN_B%%": "有" if summary["has_plan_b"] else "无",
         "%%CHANGE_BLOCK%%": render_change_block(itinerary),

@@ -85,7 +85,7 @@ def check_backtrack(days, route_style):
     return hits
 
 
-def check_day(day, prev_overnight_elev, cap_min, alt_cap_m, range_km, energy):
+def check_day(day, prev_overnight_elev, cap_min, alt_cap_m, range_km, energy, alt_relevant=True):
     warnings = []
     errors = []
 
@@ -107,9 +107,9 @@ def check_day(day, prev_overnight_elev, cap_min, alt_cap_m, range_km, energy):
         check_place(stop, "途经点")
     check_place(day.get("overnight"), "过夜点")
 
-    # MISSING_DATA (elevation)
+    # MISSING_DATA (elevation)——低地行程（altitude_relevant=false）海拔本就不采集，不算缺数据
     ov = day.get("overnight") or {}
-    if ov.get("lnglat") and ov.get("elevation_m") is None:
+    if alt_relevant and ov.get("lnglat") and ov.get("elevation_m") is None:
         add("warning", "MISSING_DATA", "过夜点缺海拔数据（elevation API 可能失败或未跑 enrich）")
 
     # DOC_CLAIM_GAP：攻略原文数字 vs 实测（只在段有 claimed 且实测已回填时比）
@@ -188,11 +188,12 @@ def main():
         alt_cap_m = 3000 if any("高反" in c for c in constraints) else 3500
     range_km = trip_request.get("vehicle", {}).get("range_km")
     energy = trip_request.get("vehicle", {}).get("energy", "fuel")
+    alt_relevant = trip_request.get("altitude_relevant", True)
 
     all_warnings, all_errors = [], []
     prev_ov_elev = None
     for day in itinerary.get("days", []):
-        w, e = check_day(day, prev_ov_elev, cap_min, alt_cap_m, range_km, energy)
+        w, e = check_day(day, prev_ov_elev, cap_min, alt_cap_m, range_km, energy, alt_relevant)
         day["warnings"] = w + e  # error 和 warning 都呈现在 warnings 里，级别在 code 语义里区分
         all_warnings.extend(w)
         all_errors.extend(e)
