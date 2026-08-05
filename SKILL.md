@@ -1,9 +1,9 @@
 ---
-name: roadtrip-planner
+name: roadbook
 description: 自驾路书流水线：输入旅行需求或既有攻略（文档/链接/聊天记录），产出信息经核验的可视化 HTML 路书。当用户提到自驾、环线、路书、多日驾车行程规划，或丢来一份攻略问"靠不靠谱/帮我核实/帮我看看"时使用，即使没有明说"攻略"或"Skill"。不适用于非自驾（跟团、纯步行城市游）或单点事实问答（只问一个地方的天气/开放时间）。
 ---
 
-# roadtrip-planner（自驾路书流水线）
+# roadbook（自驾路书流水线）
 
 **做攻略是目的，验证是质量保障，HTML 可视化是交互界面，减少人为重复操作是衡量标准。**
 
@@ -142,7 +142,7 @@ python3 scripts/summarize.py --input work/itinerary.json
 ## 目录
 
 ```
-roadtrip-planner/
+roadbook/
 ├── SKILL.md
 ├── checklists/categories.md    # 8 类必检项：query 模板/来源分级/时效窗口/判定标准（通用，不含目的地事实）
 ├── schemas/                    # trip_request / itinerary 结构定义

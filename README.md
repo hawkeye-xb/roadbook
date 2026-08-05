@@ -1,4 +1,4 @@
-# roadtrip-planner · 自驾路书流水线
+# roadbook · 自驾路书流水线
 
 [English](README.en.md)
 
@@ -16,7 +16,7 @@ AI 聊天生成的攻略看着像模像样，但数字是顺口编的：实测�
 ## 安装
 
 ```bash
-git clone <本仓库> ~/.claude/skills/roadtrip-planner
+git clone <本仓库> ~/.claude/skills/roadbook
 ```
 
 Claude Code 自动识别用户级 skill 目录，新会话即可触发。

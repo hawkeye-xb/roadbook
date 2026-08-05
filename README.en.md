@@ -1,4 +1,4 @@
-# roadtrip-planner · Verified Road-Trip Planning Pipeline
+# roadbook · Verified Road-Trip Planning Pipeline
 
 [中文（主文档）](README.md)
 
@@ -16,7 +16,7 @@ Three guarantees:
 ## Install
 
 ```bash
-git clone <this repo> ~/.claude/skills/roadtrip-planner
+git clone <this repo> ~/.claude/skills/roadbook
 ```
 
 Claude Code picks up user-level skills automatically in new sessions.
