@@ -35,13 +35,13 @@ FIDELITY_LABELS = {
     "verified": ("已核验", "fid-verified"),
 }
 
-VERDICT_ICONS = {
-    "confirmed": ("✅", "已核实"),
-    "user_confirmed": ("✅", "你已确认"),
+# 例外标注制：核验通过的不打标（沉默即合格），只有问题项才有图标和说明
+PROBLEM_ICONS = {
     "unverified": ("❓", "待核实"),
     "contradicted": ("❌", "与近期来源冲突"),
-    "stale": ("⏳", "信息可能过期，建议复检"),
+    "stale": ("⏳", "可能过期，建议复检"),
 }
+OK_VERDICTS = {"confirmed", "user_confirmed"}
 
 COLOR_ROUTE = "#16a34a"   # 统一绿色（近高德导航色），不按天染色
 COLOR_ROUGH = "#8f1d1d"   # 风险日（error 级警告/季节性道路）
@@ -101,25 +101,43 @@ def place_line(place, label):
 
 
 def render_claims(claims, heading=None):
+    """例外标注制：问题项排前带图标；核验通过的以普通文字呈现（证据折叠可查），不打 ✅。"""
     if not claims:
         return ""
     items = ""
-    for c in claims:
-        icon, verdict_txt = VERDICT_ICONS.get(c.get("verdict", "unverified"), ("❓", "待核实"))
+    ordered = sorted(claims, key=lambda c: c.get("verdict") in OK_VERDICTS)
+    for c in ordered:
+        verdict = c.get("verdict", "unverified")
         ev_html = ""
         for ev in c.get("evidence", []) or []:
             meta_bits = [b for b in [ev.get("source"), ev.get("date")] if b]
             quote = ev.get("quote")
             ev_html += (f'<div class="evidence">来源：{esc(" · ".join(meta_bits)) or "未知"}'
                         + (f'<blockquote>{esc(quote)}</blockquote>' if quote else "") + "</div>")
-        checked = f'<span class="claim-date">核验于 {esc(c["checked_at"])}</span>' if c.get("checked_at") else ""
         detail = f'<details><summary>证据</summary>{ev_html}</details>' if ev_html else ""
-        items += (f'<li class="claim-item v-{esc(c.get("verdict", "unverified"))}">'
-                  f'<span class="claim-icon">{icon}</span>'
-                  f'<span class="claim-text">{esc(c.get("claim", ""))}</span>'
-                  f'<span class="claim-verdict">{verdict_txt}</span>{checked}{detail}</li>')
+        if verdict in OK_VERDICTS:
+            items += (f'<li class="claim-item v-ok">'
+                      f'<span class="claim-text">{esc(c.get("claim", ""))}</span>{detail}</li>')
+        else:
+            icon, verdict_txt = PROBLEM_ICONS.get(verdict, ("❓", "待核实"))
+            checked = f'<span class="claim-date">核验于 {esc(c["checked_at"])}</span>' if c.get("checked_at") else ""
+            items += (f'<li class="claim-item v-{esc(verdict)}">'
+                      f'<span class="claim-icon">{icon}</span>'
+                      f'<span class="claim-text">{esc(c.get("claim", ""))}</span>'
+                      f'<span class="claim-verdict">{verdict_txt}</span>{checked}{detail}</li>')
     head = f'<div class="claims-head">{esc(heading)}</div>' if heading else ""
     return f'<div class="claims">{head}<ul>{items}</ul></div>'
+
+
+def render_trip_claims_block(claims):
+    """全程核验项：次要信息，折叠放到日卡之后，问题数进标题。"""
+    if not claims:
+        return ""
+    problems = [c for c in claims if c.get("verdict") not in OK_VERDICTS]
+    label = f'出发前核对清单：{len(problems)} 项需关注 / 共 {len(claims)} 项' if problems \
+        else f'出发前核对清单：全部核验通过（{len(claims)} 项，点开可查证据）'
+    return (f'<details class="trip-claims"{" open" if problems else ""}>'
+            f'<summary>📋 {esc(label)}</summary>{render_claims(claims)}</details>')
 
 
 RISK_LABELS = {"low": ("低", "risk-low"), "mid": ("中", "risk-mid"), "high": ("高", "risk-high")}
@@ -184,16 +202,25 @@ def render_day(day):
             for k, v in tips.items())
         tips_html = f'<details class="day-detail"><summary>当日建议（{len(tips)} 项）</summary>{sections}</details>'
 
-    fid_label, fid_cls = FIDELITY_LABELS.get(day.get("fidelity", "skeleton"), FIDELITY_LABELS["skeleton"])
-    risk_label, risk_cls = RISK_LABELS[day_risk(day)]
+    # 例外标注制：已核验/低风险是常态不打标，只有"还没到位"和"有风险"才出徽章
+    fid = day.get("fidelity", "skeleton")
+    fid_badge = ""
+    if fid != "verified":
+        fid_label, fid_cls = FIDELITY_LABELS.get(fid, FIDELITY_LABELS["skeleton"])
+        fid_badge = f'<span class="badge fidelity {fid_cls}">{fid_label}</span>'
+    risk = day_risk(day)
+    risk_badge = ""
+    if risk != "low":
+        risk_label, risk_cls = RISK_LABELS[risk]
+        risk_badge = f'<span class="badge risk {risk_cls}">{risk_label}</span>'
 
     return f'''
     <section class="day-card" id="day-{di}" data-day="{di}">
       <header class="day-head">
         <span class="day-idx">D{di}</span>
         <span class="day-date">{esc(day.get("date", ""))}</span>
-        <span class="badge risk {risk_cls}">{risk_label}</span>
-        <span class="badge fidelity {fid_cls}">{fid_label}</span>
+        {risk_badge}
+        {fid_badge}
       </header>
       <div class="day-route-title">{esc(title_route)}</div>
       {chain_html}
@@ -322,11 +349,27 @@ TEMPLATE = """<!doctype html>
   #sidebar { width:460px; overflow-y:auto; padding:1rem 1rem 4rem; flex-shrink:0; }
   #map { flex:1; height:100%; }
   .no-map #map { display:none; }
+  .no-map .view-toggle { display:none !important; }
+  .view-toggle { display:none; }
   @media (max-width: 900px) {
     .layout { flex-direction:column; height:auto; }
-    #map { order:-1; height:45vh; width:100%; flex:none; position:sticky; top:0; z-index:1500; }
+    #map { order:-1; height:52vh; width:100%; flex:none; position:sticky; top:0; z-index:1500; }
     #sidebar { width:100%; }
+    .view-toggle {
+      display:block; position:fixed; bottom:1.1rem; left:50%; transform:translateX(-50%);
+      z-index:3000; background:var(--accent); color:#fff; border:none; border-radius:999px;
+      padding:0.55rem 1.4rem; font-size:0.92rem; font-weight:600;
+      box-shadow:0 3px 10px rgba(0,0,0,0.35); cursor:pointer;
+    }
+    body.map-full #map { height:100vh; position:fixed; inset:0; }
+    body.map-full #sidebar { display:none; }
   }
+  .trip-claims { margin:1rem 0 2rem; font-size:0.87rem; }
+  .trip-claims > summary {
+    cursor:pointer; padding:0.7rem 1rem; background:var(--surface);
+    border:1px solid var(--line); border-radius:8px; font-weight:600;
+  }
+  .claim-item.v-ok { color:var(--ink-dim); }
   h1 { font-size:1.25rem; margin:0.4rem 0 0.6rem; }
   .summary {
     display:flex; flex-wrap:wrap; gap:0.4rem 1.2rem; margin:0 0 1rem;
@@ -421,11 +464,12 @@ TEMPLATE = """<!doctype html>
     <span>Plan B <b>%%HAS_PLAN_B%%</b></span>
   </div>
   %%CHANGE_BLOCK%%
-  %%TRIP_CLAIMS%%
   %%DAYS_HTML%%
+  %%TRIP_CLAIMS%%
 </div>
 <div id="map"></div>
 </div>
+<button class="view-toggle" id="viewToggle">🗺 看大图</button>
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"
         onerror="document.documentElement.classList.add('no-map')"></script>
 <script>
@@ -514,6 +558,16 @@ TEMPLATE = """<!doctype html>
   });
 
   if (all.length) map.fitBounds(all, { padding: [24, 24] });
+
+  // 移动端：地图全屏 ↔ 行程列表 切换
+  var tbtn = document.getElementById('viewToggle');
+  if (tbtn) {
+    tbtn.addEventListener('click', function () {
+      var full = document.body.classList.toggle('map-full');
+      tbtn.textContent = full ? '📋 看行程' : '🗺 看大图';
+      setTimeout(function () { map.invalidateSize(); if (all.length && full) map.fitBounds(all, { padding: [24, 24] }); }, 80);
+    });
+  }
 })();
 </script>
 </body>
@@ -564,7 +618,7 @@ def main():
         "%%WARNING_COUNT%%": str(summary["warning_count"]),
         "%%HAS_PLAN_B%%": "有" if summary["has_plan_b"] else "无",
         "%%CHANGE_BLOCK%%": render_change_block(itinerary),
-        "%%TRIP_CLAIMS%%": render_claims(itinerary.get("claims"), "全程核验项"),
+        "%%TRIP_CLAIMS%%": render_trip_claims_block(itinerary.get("claims")),
         "%%DAYS_HTML%%": "".join(render_day(d) for d in itinerary.get("days", [])),
         "%%MAP_DAYS_JSON%%": json.dumps(collect_map_days(itinerary), ensure_ascii=False, separators=(",", ":")),
     }
