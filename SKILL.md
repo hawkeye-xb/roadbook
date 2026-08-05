@@ -123,7 +123,8 @@ description: 自驾路书流水线：输入旅行需求或既有攻略（文档/
   3. **途经点方向核对**：新途经点应大致落在该段起终点之间——加"高速入口"这类点时尤其要查，装反方向等于绕路（实测案例：往东走的段加了西边的高速出口）；
   4. **只重算受影响段**：改 D6 就只重取 D6 相关 segments 的路耗和几何，不整天重算更不全程重算；
   5. 删 POI 要全链清理：stops 里的对象、受影响 segments 的合并、当日 km/h 重算、claims 里的引用；
-  6. 重跑校验 → 重渲染 → 回复里给出**新段的 km/h 变化**让用户确认。
+  6. 重跑校验 → 重渲染 → 回复里给出**新段的 km/h 变化**让用户确认；
+  7. **顺带滚动复检**：路上每次交互，把未来 48 小时内将途经的 seasonal_road / reservation 类 claim 快速重查一遍——这两类规则可能昨天刚上线（实例：某公路预约制在旅行季中途生效，早两周走的人全程无感），查到新规先看 `effective_from` 与剩余行程的关系。
 - **版本对比**：每轮微调后跑 `python3 scripts/diff_itinerary.py --old work/itinerary.prev.json --new work/itinerary.json`（改前先 `cp` 一份 prev），输出给渲染的"本次变更"块：哪几天动了、总里程/时长增减、警告增减。
 - **行前复检**：出发前用户说"再查一遍"→ `python3 scripts/check_freshness.py --input work/itinerary.json`，超时效窗口的 claim 降级 `stale`，只对 stale 项重新检索，不全量重跑。
 

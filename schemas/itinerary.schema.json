@@ -168,6 +168,7 @@
           }
         },
         "checked_at": { "type": "string", "description": "本次核验日期 YYYY-MM-DD；check_freshness.py 据此降级 stale" },
+        "effective_from": { "type": "string", "description": "该规则的生效日期（seasonal_road/reservation 类必填）；与行程日期比对：已生效/未生效/行程中途生效（第三种必须高亮）" },
         "affected_days": { "type": "array", "items": { "type": "integer" } }
       }
     }
