@@ -1,0 +1,25 @@
+{
+  "destination": "西北方向：北京 → 张家口 → 乌兰察布 → 呼和浩特 → 大同 → 北京（环线）",
+  "start_date": "2026-09-25",
+  "days": 8,
+  "vehicle": {
+    "type": "油车",
+    "energy": "fuel",
+    "range_km": 600
+  },
+  "travelers": {
+    "count": 2,
+    "drivers": 1,
+    "constraints": ["单人驾驶"]
+  },
+  "daily_drive_cap_min": 480,
+  "pace": "balanced",
+  "route_strategy": "default",
+  "route_style": "loop",
+  "allow_backtrack": false,
+  "driver_profile": "normal",
+  "must_visit": [],
+  "must_avoid": [],
+  "overnight_altitude_cap_m": 3500,
+  "altitude_relevant": true
+}

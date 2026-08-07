@@ -132,8 +132,12 @@ def render_claims(claims, heading=None):
     return f'<div class="claims">{head}<ul>{items}</ul></div>'
 
 
-def render_trip_claims_block(claims):
-    """全程核验项：次要信息，折叠放到日卡之后，问题数进标题。"""
+def render_trip_claims_block(claims, day_claims_exist=False):
+    """全程核验项：次要信息，折叠放到日卡之后，问题数进标题。
+    整本路书一条 claim 都没有 = 检索核验被跳过了——必须显式警示，不能静默。"""
+    if not claims and not day_claims_exist:
+        return ('<div class="disclaimer">⚠ 本路书未附检索核验记录：门禁动线、预约规则、'
+                '季节封路、花期等信息未经查证，出发前请自行核实。</div>')
     if not claims:
         return ""
     problems = [c for c in claims if c.get("verdict") not in OK_VERDICTS]
@@ -649,7 +653,9 @@ def main():
         "%%WARNING_COUNT%%": str(summary["warning_count"]),
         "%%HAS_PLAN_B%%": "有" if summary["has_plan_b"] else "无",
         "%%CHANGE_BLOCK%%": render_change_block(itinerary),
-        "%%TRIP_CLAIMS%%": render_trip_claims_block(itinerary.get("claims")),
+        "%%TRIP_CLAIMS%%": render_trip_claims_block(
+            itinerary.get("claims"),
+            day_claims_exist=any(d.get("claims") for d in itinerary.get("days", []))),
         "%%DAYS_HTML%%": "".join(render_day(d) for d in itinerary.get("days", [])),
         "%%MAP_DAYS_JSON%%": json.dumps(collect_map_days(itinerary), ensure_ascii=False, separators=(",", ":")),
     }

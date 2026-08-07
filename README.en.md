@@ -4,6 +4,9 @@
 
 Give it a one-line trip request — or paste in any itinerary written by an AI or a stranger — and it produces a **fact-checked, visual, iterable** road book: a self-contained HTML file that opens with a double-click, works on phones, and can be shared directly.
 
+
+![roadbook 产出示例：真实公路地图 + 逐日卡片 + 核验标注](docs/screenshot-desktop.png)
+
 ## Why
 
 AI-generated itineraries look plausible but the numbers are made up. Real case: a guide claimed "250 km / 3.5 h" for a leg that actually measures 352 km — the AI forgot the lake was in the opposite direction. Operational facts (which gate allows entry, reservation mini-programs, bloom windows) also rot quickly in training data.
@@ -55,6 +58,18 @@ L4 refinement   (touch only affected days; visual diff; one-command pre-departur
 ```
 
 Single source of truth: `work/itinerary.json`. The HTML is always a projection of it.
+
+## Tested across models
+
+Same skill, different agents (Aug 2026):
+
+| Model | Test route | Result |
+|---|---|---|
+| Claude (Fable 5) | Guangxi border & coast, 13d, EV | Fully compliant: 11 verified claims (1 pending), real geometry, lowland elevation auto-hidden |
+| DeepSeek V4 Pro | Northwest loop, 8d | Structurally compliant, 4 claims verified with evidence; ~157.6k in / 43.9k out tokens |
+| Kimi K3 | Northeast loop, 13d | Rendering/interaction/elevation compliant; **retrieval verification silently skipped** (0 claims) |
+
+Honest takeaway: script-enforced parts (rendering, computable checks, geometry, elevation gating) are model-agnostic; retrieval-verification depth varies with model capability. The renderer now shows a mandatory warning banner whenever a road book carries zero verification records.
 
 ## Version & updates
 
