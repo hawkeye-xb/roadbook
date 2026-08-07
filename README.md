@@ -15,8 +15,14 @@ AI 聊天生成的攻略看着像模像样，但数字是顺口编的：实测�
 
 ## 安装
 
+两个源任选（内容同步，国内网络推荐 Gitee）：
+
 ```bash
-git clone <本仓库> ~/.claude/skills/roadbook
+# Gitee（国内推荐）
+git clone https://gitee.com/crawlerxii/roadbook.git ~/.claude/skills/roadbook
+
+# GitHub
+git clone https://github.com/hawkeye-xb/roadbook.git ~/.claude/skills/roadbook
 ```
 
 Claude Code 自动识别用户级 skill 目录，新会话即可触发。
@@ -52,13 +58,15 @@ L4 微调（只动受影响天，diff 可视化；出发前一键复检过期项
 
 ## 版本与更新
 
-当前版本见 `VERSION` 文件（语义化版本号）。更新：
+当前版本见 `VERSION` 文件（语义化版本号）。更新（从你 clone 时选的源 pull 即可）：
 
 ```bash
 cd ~/.claude/skills/roadbook && git pull
 ```
 
 更新在新会话生效。行程数据在你自己的工作目录 `work/` 下，更新 skill 不影响已生成的路书。
+
+> 维护说明：GitHub 为主仓库，Gitee 为镜像；GitHub 推送后在 Gitee 仓库页点"同步"按钮即可对齐。
 
 ## 已知局限
 
@@ -67,4 +75,4 @@ cd ~/.claude/skills/roadbook && git pull
 
 ## License
 
-个人项目，随意参考。
+[MIT](LICENSE)

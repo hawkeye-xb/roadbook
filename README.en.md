@@ -15,8 +15,14 @@ Three guarantees:
 
 ## Install
 
+Two sources, same content (Gitee recommended for mainland-China networks):
+
 ```bash
-git clone <this repo> ~/.claude/skills/roadbook
+# Gitee (mainland China)
+git clone https://gitee.com/crawlerxii/roadbook.git ~/.claude/skills/roadbook
+
+# GitHub
+git clone https://github.com/hawkeye-xb/roadbook.git ~/.claude/skills/roadbook
 ```
 
 Claude Code picks up user-level skills automatically in new sessions.
@@ -58,7 +64,9 @@ Current version lives in the `VERSION` file (semver). To update:
 cd ~/.claude/skills/roadbook && git pull
 ```
 
-Updates take effect in new sessions. Your trip data stays in your own `work/` directory — updating the skill never touches generated road books.
+Updates take effect in new sessions (pull from whichever source you cloned). Your trip data stays in your own `work/` directory — updating the skill never touches generated road books.
+
+> Maintainer note: GitHub is the primary repo; Gitee is a mirror — click "Sync" on the Gitee repo page after each GitHub push.
 
 ## Known limits
 
@@ -67,4 +75,4 @@ Updates take effect in new sessions. Your trip data stays in your own `work/` di
 
 ## License
 
-Personal project; use freely for reference.
+[MIT](LICENSE)
