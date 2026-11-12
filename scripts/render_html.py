@@ -16,6 +16,7 @@
 import argparse
 import html
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -155,29 +156,63 @@ RISK_LABELS = {"low": ("低", "risk-low"), "mid": ("中", "risk-mid"), "high": (
 
 
 def usable_place(p):
-    """坐标成对且为数字才算可用——[None, None] 这类脏数据会拼出 dlat=None 的坏链接。"""
-    ll = (p or {}).get("lnglat")
-    return (isinstance(ll, (list, tuple)) and len(ll) == 2
-            and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in ll))
+    """坐标成对、为有限数字、在经纬度范围内才算可用。
+    [None, None]、NaN/Infinity、越界值都会拼出坏链接（dlat=None / dlon=nan），高德点了没反应。"""
+    if not isinstance(p, dict):
+        return False
+    ll = p.get("lnglat")
+    if not (isinstance(ll, (list, tuple)) and len(ll) == 2):
+        return False
+    lng, lat = ll
+    if not all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in ll):
+        return False
+    return (math.isfinite(lng) and math.isfinite(lat)
+            and -180 <= lng <= 180 and -90 <= lat <= 90)
+
+
+def place_km(a, b):
+    """两点直线距离（公里）。用来判断「景点是不是已经被路段端点覆盖」，不追求精度。"""
+    lng1, lat1 = a
+    lng2, lat2 = b
+    dx = (lng2 - lng1) * 111.32 * math.cos(math.radians((lat1 + lat2) / 2))
+    dy = (lat2 - lat1) * 110.57
+    return math.hypot(dx, dy)
+
+
+NEAR_KM = 2.0  # 途经点离某个路段端点这么近，就当作同一处，不再单独加进导航
 
 
 def day_nav_points(day):
-    """当天一键导航的点序：各段终点依次排列（途经点在前、终点在最后）。
-    起点不放（由 day_origin 决定）；无路段的日子（城内游）退回 stops + 过夜点。
+    """当天一键导航的点序：路段终点是主干，当天景点插在终点前。
+    起点不放（由 day_origin 决定）；无路段的日子退回 stops + 过夜点。
+    景点离某个路段端点不到 NEAR_KM 就不再重复加（景区本身就是路段终点的日子）。
     末点坐标不可用时整条返回空：宁可不出按钮，也不能让终点悄悄变成倒数第二个点。"""
     segs = day.get("segments") or []
+    stops = day.get("stops") or []
     if segs:
-        cands = [s.get("to") for s in segs]
-        if cands and not usable_place(cands[-1]):
-            return []
+        ends = [s.get("to") for s in segs]
+        if ends and not usable_place(ends[-1]):
+            ov = day.get("overnight")
+            if usable_place(ov) and isinstance(ends[-1], dict) and ov.get("name") == ends[-1].get("name"):
+                ends = ends[:-1] + [ov]  # 末点缺坐标但过夜点同名可用：终点落在过夜点上
+            else:
+                return []
+        seq = [p for p in ends if usable_place(p)]
+        extras = [s for s in stops if usable_place(s)
+                  and all(place_km(s["lnglat"], p["lnglat"]) > NEAR_KM for p in seq)]
+        cands = seq[:-1] + extras + seq[-1:]
     else:
-        cands = list(day.get("stops") or []) + [day.get("overnight")]
+        if not any(usable_place(s) for s in stops):
+            return []  # 休息日：只有过夜点，没有可导航的行程
+        cands = list(stops) + [day.get("overnight")]
     pts = []
     for p in cands:
         if not usable_place(p):
             continue
         cur = {"name": p.get("name", ""), "lnglat": list(p["lnglat"])}
         if pts and pts[-1]["lnglat"] == cur["lnglat"]:  # 按坐标判重：同名不同点是两个地方
+            if cur["name"]:  # 同坐标连着出现时，用后一个的名字（终点名更贴近实际）
+                pts[-1]["name"] = cur["name"]
             continue
         pts.append(cur)
     return pts
@@ -555,8 +590,6 @@ TEMPLATE = """<!doctype html>
     padding:0.3rem 0.6rem; font-size:0.82rem; font-weight:600; cursor:pointer;
   }
   .map-overview-btn:hover { background:#f4f4f4; }
-  .day-detail { margin:0.4rem 0; font-size:0.85rem; }
-  .day-detail summary { color:var(--ink-dim); cursor:pointer; }
   .detail-section { margin:0.5rem 0 0 0.2rem; }
   .detail-label { font-size:0.72rem; font-weight:700; letter-spacing:0.08em; color:var(--ink-dim); }
   .detail-content { margin-top:0.15rem; line-height:1.5; }
@@ -586,7 +619,10 @@ TEMPLATE = """<!doctype html>
     /* 收起只由 JS 加 .open 控制；脚本没跑起来（禁 JS/离线）时正文必须照常可读 */
     html.js .day-card .day-content { display:none; }
     html.js .day-card.open .day-content { display:block; }
-    .day-more > summary { display:block; color:var(--ink-dim); cursor:pointer; font-size:0.82rem; }
+    .day-more > summary {
+      display:flex; align-items:center; min-height:44px;
+      color:var(--ink-dim); cursor:pointer; font-size:0.82rem;
+    }
     .day-more.has-problems > summary { color:var(--warn); }
     .summary { font-size:0.8rem; gap:0.3rem 0.9rem; padding:0.6rem 0.8rem; margin-bottom:0.7rem; }
     h1 { font-size:1.1rem; margin:0.2rem 0 0.5rem; }
@@ -600,8 +636,8 @@ TEMPLATE = """<!doctype html>
     body.map-full #sidebar { display:none; }
   }
   @media (prefers-color-scheme: dark) {
-    /* 暗色的 accent 是浅绿，白字对比度不足；导航按钮用深一档底色 */
-    .nav-btn { background:#2f6f63; color:#fff; }
+    /* 暗色的 accent 是浅绿，白字对比度不足；导航按钮与看大图用深一档底色 */
+    .nav-btn, .view-toggle { background:#2f6f63; color:#fff; }
   }
 </style>
 </head>
@@ -623,6 +659,8 @@ TEMPLATE = """<!doctype html>
 </div>
 <div id="map"></div>
 </div>
+<noscript><style>#map{display:none!important}.view-toggle{display:none!important}
+  .day-mini,.day-chev{display:none!important}</style></noscript>
 <button class="view-toggle" id="viewToggle">🗺 看大图</button>
 <script>
 // 手风琴与日期归一化：不依赖地图脚本。离线、CDN 被墙、禁 JS 也要能读。
@@ -704,9 +742,32 @@ TEMPLATE = """<!doctype html>
   }
   RB.syncMode = syncMode;
   syncMode();
-  if (mq.addEventListener) mq.addEventListener('change', syncMode);
-  else if (mq.addListener) mq.addListener(syncMode);
-  window.addEventListener('resize', syncMode);  // 设备模拟等场景可能不派发 media change
+  var lastMobile = mq.matches;
+
+  // 断点切换后手机端要有卡是展开的：旋转屏幕、拉窄窗口后不能变成「全部收起且点不开」
+  function ensureOpenCard() {
+    if (document.querySelector('.day-card.open')) return;
+    var picked = document.querySelector('.day-card.active');
+    if (!picked) {
+      var todayS = todayStr();
+      cards.forEach(function (c) {
+        var d = c.querySelector('.day-date');
+        if (d && dayDate(d.textContent) === todayS) picked = c;
+      });
+    }
+    if (!picked) picked = cards[0];
+    if (picked) openDay(picked.getAttribute('data-day'), false);
+  }
+
+  function onViewportChange() {
+    if (mq.matches === lastMobile) return;  // 手机滚动收地址栏也会触发 resize，不能每次都重排
+    lastMobile = mq.matches;
+    syncMode();
+    if (mq.matches) ensureOpenCard();
+  }
+  if (mq.addEventListener) mq.addEventListener('change', onViewportChange);
+  else if (mq.addListener) mq.addListener(onViewportChange);
+  window.addEventListener('resize', onViewportChange);  // 部分环境不派发 media change
 
   if (isMobile()) {  // 默认展开今天；不在行程期就展开第一天
     var target = null;
@@ -730,6 +791,13 @@ TEMPLATE = """<!doctype html>
     document.documentElement.classList.add('no-map');
     return;
   }
+  try {
+    initMap();
+  } catch (err) {
+    document.documentElement.classList.add('no-map');  // 初始化挂了就退回纯列表，别留空白地图和死按钮
+  }
+
+  function initMap() {
   var ICONS = { hotel: '🏨', scenic: '⭐', rest: '⛽' };
   var map = L.map('map');
   L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
@@ -786,8 +854,7 @@ TEMPLATE = """<!doctype html>
 
   function selectDay(idx, scrollCard, fromCard) {
     if (!fromCard && window.RB && window.RB.isMobile()) {  // 手机上「选中」= 展开那张卡
-      if (String(selected) === String(idx)) return;
-      window.RB.openDay(idx, scrollCard);
+      window.RB.openDay(idx, scrollCard);  // 已选中的那天被收起后，再点折线也要能重新展开
       return;
     }
     if (selected === idx) {  // 再点一次取消选中 → 回全览；从卡片展开进来时选中已就位，不回全览
@@ -855,14 +922,16 @@ TEMPLATE = """<!doctype html>
       setTimeout(function () { map.invalidateSize(); if (all.length && full) map.fitBounds(all, { padding: [24, 24] }); }, 80);
     });
   }
+  }
 })();
 
 // 一键导航：按平台唤起高德 App（独立于地图脚本，地图加载失败也能用）
 (function () {
   var ua = navigator.userAgent;
+  var iOSLike = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
   var platform = /MicroMessenger/i.test(ua) ? 'wechat'
-    : /iPhone|iPad|iPod/i.test(ua) ? 'ios'
-    : /Android|HarmonyOS/i.test(ua) ? 'android' : 'desktop';
+    : iOSLike ? 'ios'
+    : /Android|HarmonyOS|OpenHarmony/i.test(ua) ? 'android' : 'desktop';
   var HINTS = {
     wechat: '微信里打不开高德：点右上角 ··· 选「在浏览器打开」，再点导航',
     desktop: '用手机打开本页，点这里即可在高德 App 里导航',
@@ -886,16 +955,25 @@ TEMPLATE = """<!doctype html>
     var m = /(\\d{4})-(\\d{2})-(\\d{2})/.exec(s || '');
     return m ? m[0] : '';
   }
+  function markLabels() {
+    document.querySelectorAll('.nav-btn').forEach(function (btn) {
+      var d = normDate(btn.getAttribute('data-date'));
+      btn.textContent = (d && d === todayStr()) ? '🧭 高德导航今天' : '🧭 高德一键导航';
+    });
+  }
+  markLabels();
+  // 页面常在后台挂着，回到前台时重算「今天」，避免跨夜后文案过期
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) markLabels(); });
+
   document.querySelectorAll('.nav-btn').forEach(function (btn) {
     var date = normDate(btn.getAttribute('data-date'));
-    if (date && date === todayStr()) btn.textContent = '🧭 高德导航今天';
     btn.addEventListener('click', function (e) {
       e.preventDefault();
       e.stopPropagation();
       if (platform === 'wechat' || platform === 'desktop') return hint(btn, platform);
-      // 当天：从当前位置出发；翻看其它日子：按行程起点，避免算出书外的路线
+      // 当天/无日期：从当前位置出发；翻看其它日子：按行程起点，避免算出书外的路线
       var fixed = btn.getAttribute('data-' + platform + '-fixed');
-      var useFixed = fixed && date && date !== todayStr();
+      var useFixed = fixed && (!date || date !== todayStr());
       location.href = useFixed ? fixed : btn.getAttribute('data-' + platform);
       // 唤起成功页面会进后台；2 秒后仍在前台 = 多半没装高德
       setTimeout(function () { if (!document.hidden) hint(btn, 'missing'); }, 2000);
