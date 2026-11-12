@@ -46,6 +46,13 @@ Claude Code picks up user-level skills automatically in new sessions.
 - **Verify an existing guide**: paste any itinerary + "is this reliable?"
 - **On-the-road edits**: "Add a stop at Anjihai Canyon on Day 3" — only affected segments are recomputed
 
+## On the phone
+
+The same HTML switches to a phone layout: a 30% map pinned on top, one line per day (date · route · distance), and tapping a day expands it — navigation button, stops, overnight. Tips and verification evidence fold one level deeper; risks and warnings always stay in the expanded view.
+
+- **One-tap AMap navigation**: each day's waypoints in order, ending at that day's last stop;
+- **Origin follows the date**: today routes from your current location, other days start from the itinerary's own start point.
+
 ## How it works
 
 ```
