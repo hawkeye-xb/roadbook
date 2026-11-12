@@ -145,12 +145,13 @@ class RenderDayNavButton(unittest.TestCase):
         self.assertTrue(attrs(html)["data-android-fixed"].startswith("amapuri://route/plan/?"))
         self.assertEqual(attrs(html)["data-date"], "2026-09-27")
 
-    def test_ring_day_gets_no_fixed_variant(self):
-        # 起终点同一坐标（环线日），高德未必接受 slat==dlat，交给当前位置
+    def test_ring_day_keeps_fixed_start(self):
+        # 环线日（起终点同城）：固定起点版必须保留，否则翻看时又变回「从我家出发」
         html = render_html.render_day({"day_index": 6, "date": "2026-09-30",
                                        "segments": [seg(BJ, ZJK), seg(ZJK, BJ)]})
-        self.assertIn('class="nav-btn"', html)
-        self.assertNotIn("-fixed=", html)
+        q = params(attrs(html)["data-ios-fixed"])
+        self.assertEqual((q["sname"], q["dname"]), ("北京", "北京"))
+        self.assertEqual(q["vianames"], "张家口")
 
     def test_terminal_without_coordinates_renders_no_button(self):
         # 末点坐标缺失时不能把终点悄悄换成倒数第二个点

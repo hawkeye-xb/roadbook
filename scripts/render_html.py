@@ -228,11 +228,8 @@ def render_nav_button(day):
     if not urls:
         return ""
     origin = day_origin(day)
-    if origin and points and (origin["lnglat"] == points[0]["lnglat"]
-                              or origin["lnglat"] == points[-1]["lnglat"]):
-        # 起点就是第一个/最后一个目的地：城内日没有「从起点出发」；环线日起终点相同，
-        # 高德未必接受 slat==dlat 的规划，交给当前位置
-        origin = None
+    if origin and points and origin["lnglat"] == points[0]["lnglat"]:
+        origin = None  # 起点本身就是要去的第一个点（城内日），没有固定起点的意义
     fixed_attrs = ""
     if origin:
         fixed = amap_nav_urls(points, origin)
