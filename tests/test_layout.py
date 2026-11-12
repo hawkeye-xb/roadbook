@@ -60,7 +60,14 @@ class DayCardShell(unittest.TestCase):
             {"claim": "A", "verdict": "confirmed"},
             {"claim": "B", "verdict": "contradicted"}]})
         self.assertIn('class="day-more has-problems"', html)
-        self.assertIn("1 项待核实", html)
+        summary = re.search(r'<summary>(.*?)</summary>', html).group(1)
+        self.assertEqual(summary, "1 项待核实")  # 精确值：子串断言对「11 项待核实」也会通过
+
+    def test_more_fold_open_by_default(self):
+        # 桌面端依赖这个 open：删掉它二级折叠在桌面就永远展开不了（summary 被隐藏）
+        html = render_html.render_day({"day_index": 1, "claims": [
+            {"claim": "A", "verdict": "confirmed"}]})
+        self.assertRegex(html, r'<details class="day-more[^"]*" open>')
 
 
 if __name__ == "__main__":

@@ -50,7 +50,7 @@ Claude Code picks up user-level skills automatically in new sessions.
 
 The same HTML switches to a phone layout: a 30% map pinned on top, one line per day (date · route · distance), and tapping a day expands it — navigation button, stops, overnight. Tips and verification evidence fold one level deeper; risks and warnings always stay in the expanded view.
 
-- **One-tap AMap navigation**: a button on every day that has coordinates, with that day's waypoints in order, ending at its last stop;
+- **One-tap AMap navigation**: a button on every day that has coordinates, with that day's waypoints in order, ending at its last stop. Segment endpoints set the backbone; stops not already covered by a segment are inserted before the destination, so a planned sight never falls off the route;
 - **Origin follows the date**: today routes from your current location; other days start from that day's own start point, so you never see a route "from my home to the destination" that isn't in the book. Days without a start point (in-town sightseeing) still use the current location.
 
 ## How it works

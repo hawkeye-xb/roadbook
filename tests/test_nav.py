@@ -64,6 +64,36 @@ class DayNavPoints(unittest.TestCase):
         day = {"segments": [], "stops": [{"name": "坏点", "lnglat": [None, None]}, HHHT]}
         self.assertEqual([p["name"] for p in render_html.day_nav_points(day)], ["呼和浩特"])
 
+    def test_nan_coordinates_are_skipped(self):
+        bad = {"name": "坏点", "lnglat": [float("nan"), 40.0]}
+        self.assertEqual([p["name"] for p in render_html.day_nav_points(
+            {"segments": [], "stops": [bad, HHHT]})], ["呼和浩特"])
+
+    def test_stop_not_covered_by_segments_is_added_before_destination(self):
+        # D1 类型：路段 北京→张家口，当天还要去大境门，导航不能漏
+        day = {"segments": [seg(P("北京", 116.4, 39.9), P("张家口", 114.9, 40.8))],
+               "stops": [P("大境门", 114.87, 40.85)]}
+        self.assertEqual([p["name"] for p in render_html.day_nav_points(day)], ["大境门", "张家口"])
+
+    def test_stop_near_segment_endpoint_is_not_duplicated(self):
+        day = {"segments": [seg(P("乌兰察布", 113.1, 41.0), P("火山公园", 113.2, 41.1))],
+               "stops": [P("火山景区", 113.201, 41.099)]}
+        self.assertEqual([p["name"] for p in render_html.day_nav_points(day)], ["火山公园"])
+
+    def test_same_coordinates_keep_later_name(self):
+        # 同坐标连着出现：终点名应该是后一个（更贴近实际停靠点）
+        day = {"segments": [seg(BJ, P("停车场", 113.1, 41.0)),
+                            seg(P("停车场", 113.1, 41.0), P("山顶", 113.1, 41.0))]}
+        self.assertEqual([p["name"] for p in render_html.day_nav_points(day)], ["山顶"])
+
+    def test_terminal_missing_coords_falls_back_to_same_named_overnight(self):
+        day = {"segments": [seg(BJ, ZJK), seg(ZJK, {"name": "呼和浩特"})], "overnight": HHHT}
+        self.assertEqual([p["name"] for p in render_html.day_nav_points(day)], ["张家口", "呼和浩特"])
+
+    def test_rest_day_without_stops_has_nothing_to_navigate(self):
+        self.assertEqual(render_html.day_nav_points(
+            {"segments": [], "stops": [], "overnight": HHHT}), [])
+
     def test_nothing_to_navigate(self):
         self.assertEqual(render_html.day_nav_points({"segments": [], "stops": []}), [])
 
@@ -157,6 +187,20 @@ class RenderDayNavButton(unittest.TestCase):
         # 末点坐标缺失时不能把终点悄悄换成倒数第二个点
         html = render_html.render_day({"day_index": 2, "segments": [seg(BJ, ZJK), seg(ZJK, {"name": "无坐标"})]})
         self.assertNotIn("nav-btn", html)
+
+    def test_fixed_start_survives_same_name_different_coordinates(self):
+        # 起点与首个目的地同名但不同点：仍是两个地方，固定起点版必须保留
+        html = render_html.render_day({"day_index": 2, "segments": [
+            seg(P("服务区", 1, 2), P("服务区", 3, 4))]})
+        q = params(attrs(html)["data-ios-fixed"])
+        self.assertEqual((q["slat"], q["dlat"]), ("2", "4"))
+
+    def test_nav_attributes_are_html_escaped(self):
+        # 属性里的 & 必须转义；否则带引号/尖括号的行程文本能截断标签
+        html = render_html.render_day({"day_index": 1, "segments": [seg(BJ, ZJK)]})
+        tag = re.search(r'<a class="nav-btn"[^>]*>', html).group(0)
+        self.assertIn("&amp;", tag)
+        self.assertNotIn("&sid=", tag)
 
     def test_city_day_has_no_fixed_variant(self):
         # 起点就是第一个要去的点：没有「从起点出发」这回事
