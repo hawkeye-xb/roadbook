@@ -2,10 +2,12 @@
 
 运行：python3 -m unittest discover -s tests
 """
+import html as htmllib
+import re
 import sys
 import unittest
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 import render_html  # noqa: E402
@@ -13,6 +15,12 @@ import render_html  # noqa: E402
 
 def P(name, lng, lat):
     return {"name": name, "lnglat": [lng, lat], "source": "amap"}
+
+
+def attrs(html):
+    """nav 按钮上的 data-* 属性（HTML 实体已还原）。"""
+    tag = re.search(r'<a class="nav-btn"[^>]*>', html).group(0)
+    return {k: htmllib.unescape(v) for k, v in re.findall(r'(data-[a-z-]+)="([^"]*)"', tag)}
 
 
 def seg(a, b):
@@ -45,6 +53,16 @@ class DayNavPoints(unittest.TestCase):
     def test_consecutive_duplicates_collapse(self):
         day = {"segments": [], "stops": [HHHT], "overnight": HHHT}
         self.assertEqual(len(render_html.day_nav_points(day)), 1)
+
+    def test_same_name_different_coordinates_are_kept(self):
+        # 两个「观景台」是两处地方，按名字判重会把真实停靠点吞掉
+        day = {"segments": [seg(BJ, P("观景台", 116.0, 40.0)), seg(P("观景台", 116.0, 40.0), P("观景台", 117.0, 41.0))]}
+        self.assertEqual([p["lnglat"] for p in render_html.day_nav_points(day)],
+                         [[116.0, 40.0], [117.0, 41.0]])
+
+    def test_invalid_coordinates_are_skipped(self):
+        day = {"segments": [], "stops": [{"name": "坏点", "lnglat": [None, None]}, HHHT]}
+        self.assertEqual([p["name"] for p in render_html.day_nav_points(day)], ["呼和浩特"])
 
     def test_nothing_to_navigate(self):
         self.assertEqual(render_html.day_nav_points({"segments": [], "stops": []}), [])
@@ -117,11 +135,27 @@ class RenderDayNavButton(unittest.TestCase):
         html = render_html.render_day({"day_index": 8, "segments": [], "stops": []})
         self.assertNotIn("nav-btn", html)
 
-    def test_fixed_start_variant_and_date_emitted(self):
-        html = render_html.render_day({"day_index": 1, "date": "2026-09-25",
-                                       "segments": [seg(BJ, ZJK)]})
-        self.assertIn("data-android-fixed=", html)
-        self.assertIn('data-date="2026-09-25"', html)
+    def test_fixed_start_variant_carries_origin(self):
+        # 固定起点版必须真的以行程起点出发，两个平台都在；只查属性存在会漏掉「忽略 origin」
+        html = render_html.render_day({"day_index": 3, "date": "2026-09-27",
+                                       "segments": [seg(WLCB, HHHT)]})
+        q = params(attrs(html)["data-ios-fixed"])
+        self.assertEqual((q["slat"], q["slon"], q["sname"]), ("41.0", "113.1", "乌兰察布"))
+        self.assertEqual(q["dname"], "呼和浩特")
+        self.assertTrue(attrs(html)["data-android-fixed"].startswith("amapuri://route/plan/?"))
+        self.assertEqual(attrs(html)["data-date"], "2026-09-27")
+
+    def test_ring_day_gets_no_fixed_variant(self):
+        # 起终点同一坐标（环线日），高德未必接受 slat==dlat，交给当前位置
+        html = render_html.render_day({"day_index": 6, "date": "2026-09-30",
+                                       "segments": [seg(BJ, ZJK), seg(ZJK, BJ)]})
+        self.assertIn('class="nav-btn"', html)
+        self.assertNotIn("-fixed=", html)
+
+    def test_terminal_without_coordinates_renders_no_button(self):
+        # 末点坐标缺失时不能把终点悄悄换成倒数第二个点
+        html = render_html.render_day({"day_index": 2, "segments": [seg(BJ, ZJK), seg(ZJK, {"name": "无坐标"})]})
+        self.assertNotIn("nav-btn", html)
 
     def test_city_day_has_no_fixed_variant(self):
         # 起点就是第一个要去的点：没有「从起点出发」这回事
