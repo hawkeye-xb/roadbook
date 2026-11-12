@@ -8,7 +8,10 @@
 地图：真实道路几何 polyline（segments[].geometry，由 fetch_geometry.py 写入；
 无几何的段回退为虚线直连）、分类标记（🏨 过夜 / ⭐ 途经 / ⛽ 补给）带弹窗、
 风险日变色、点卡片高亮当天路线。
-卡片：海拔链、风险徽章、真实/估算驾驶标注、分辨率徽章、claims 核验标注。
+卡片：海拔链、风险徽章、真实/估算驾驶标注、分辨率徽章、claims 核验标注、
+高德一键导航（当天途经点 + 终点一次带进高德 App）。
+移动端：地图收窄到 3 成，日卡改成手风琴——收起只留 D/日期/路线一行，展开一天才看
+导航按钮、途经点；建议与核验依据再收一层折叠。
 """
 import argparse
 import html
@@ -16,6 +19,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 WARNING_LABELS = {
     "UNVERIFIED_POI": "坐标未核验",
@@ -150,6 +154,82 @@ def render_trip_claims_block(claims, day_claims_exist=False):
 RISK_LABELS = {"low": ("低", "risk-low"), "mid": ("中", "risk-mid"), "high": ("高", "risk-high")}
 
 
+def day_nav_points(day):
+    """当天一键导航的点序：各段终点依次排列（途经点在前、终点在最后）。
+    起点不放——导航从"我的位置"出发；无路段的日子（城内游）退回 stops + 过夜点。无坐标的点跳过。"""
+    segs = day.get("segments") or []
+    if segs:
+        cands = [s.get("to") for s in segs]
+    else:
+        cands = list(day.get("stops") or []) + [day.get("overnight")]
+    pts = []
+    for p in cands:
+        if not p or not p.get("lnglat"):
+            continue
+        if pts and pts[-1]["name"] == p.get("name"):
+            continue
+        pts.append({"name": p.get("name", ""), "lnglat": p["lnglat"]})
+    return pts
+
+
+def day_origin(day):
+    """当天行程的起点：第一段的 from；城内日（无路段）退回第一个有坐标的途经点。
+    与第一个目的地重合时返回 None——没有「从起点出发」这回事。"""
+    segs = day.get("segments") or []
+    if segs:
+        p = segs[0].get("from")
+        return {"name": p.get("name", ""), "lnglat": p["lnglat"]} if p and p.get("lnglat") else None
+    for s in day.get("stops") or []:
+        if s.get("lnglat"):
+            return {"name": s.get("name", ""), "lnglat": s["lnglat"]}
+    return None
+
+
+def amap_nav_urls(points, origin=None):
+    """高德地图 App 路线规划唤起链接（Android amapuri / iOS iosamap，参数同构）。
+    多途经点只有 App URI 支持（Web URI 限 1 个）。坐标来自高德即 GCJ-02，dev=0 不再偏移。
+    origin 为空时起点留空 = 高德按「我的位置」规划。"""
+    if not points:
+        return None
+
+    def name(p):  # "|" 是途经点分隔符，名字里出现会把列表切错
+        return quote(str(p["name"]).replace("|", " "), safe="")
+
+    *vias, dest = points
+    slat = slon = sname = ""
+    if origin and origin.get("lnglat"):
+        slat, slon = origin["lnglat"][1], origin["lnglat"][0]
+        sname = name(origin)
+    q = (f"sourceApplication=roadbook&sid=&slat={slat}&slon={slon}&sname={sname}"
+         f"&did=&dlat={dest['lnglat'][1]}&dlon={dest['lnglat'][0]}&dname={name(dest)}&dev=0&t=0")
+    if vias:
+        q += (f"&vian={len(vias)}"
+              f"&vialons={'|'.join(str(p['lnglat'][0]) for p in vias)}"
+              f"&vialats={'|'.join(str(p['lnglat'][1]) for p in vias)}"
+              f"&vianames={'|'.join(name(p) for p in vias)}")
+    return {"android": "amapuri://route/plan/?" + q, "ios": "iosamap://path?" + q}
+
+
+def render_nav_button(day):
+    """两套链接：*_fixed 是当天行程起点版本，点击时按日期选（见页面脚本 nav）。
+    当天开这一天就用当前位置；翻看其它日子用起点，避免从「人在哪」规划出一条不是书里的路。"""
+    points = day_nav_points(day)
+    urls = amap_nav_urls(points)
+    if not urls:
+        return ""
+    origin = day_origin(day)
+    if origin and points and origin["name"] == points[0]["name"] and origin["lnglat"] == points[0]["lnglat"]:
+        origin = None  # 起点本身就是要去的第一个点（城内日），没有固定起点的意义
+    fixed_attrs = ""
+    if origin:
+        fixed = amap_nav_urls(points, origin)
+        fixed_attrs = (f' data-android-fixed="{esc(fixed["android"])}"'
+                       f' data-ios-fixed="{esc(fixed["ios"])}"')
+    return (f'<a class="nav-btn" href="#" data-android="{esc(urls["android"])}" data-ios="{esc(urls["ios"])}"'
+            f'{fixed_attrs} data-date="{esc(day.get("date", ""))}">'
+            f'🧭 高德一键导航今天</a>')
+
+
 def render_day(day):
     di = day.get("day_index", "?")
     total_km = sum(s.get("distance_km") or 0 for s in day.get("segments", []))
@@ -199,15 +279,19 @@ def render_day(day):
     ov_html = place_line(ov, "过夜") if ov else ""
     note_html = f'<div class="day-note">{esc(day.get("note"))}</div>' if day.get("note") else ""
 
-    # 信息密度分级：温度/穿衣/拍摄/美食这类建议折叠，顶层不堆内容
+    # 第二层折叠：建议、核验依据这类「行前才细读」的内容不上顶层；
+    # 风险警告不进折叠——安全信息必须撑开就能看见
     tips = day.get("tips") or {}
-    tips_html = ""
-    if tips:
-        sections = "".join(
-            f'<div class="detail-section"><div class="detail-label">{esc(k)}</div>'
-            f'<div class="detail-content">{esc(v)}</div></div>'
-            for k, v in tips.items())
-        tips_html = f'<details class="day-detail"><summary>当日建议（{len(tips)} 项）</summary>{sections}</details>'
+    tips_html = "".join(
+        f'<div class="detail-section"><div class="detail-label">{esc(k)}</div>'
+        f'<div class="detail-content">{esc(v)}</div></div>'
+        for k, v in tips.items())
+    claims_html = render_claims(day.get("claims"))
+    more_bits = ([f"{len(tips)} 项建议"] if tips else []) + (["核验依据"] if claims_html else [])
+    more_html = (f'<details class="day-more" open><summary>{" · ".join(more_bits)}</summary>'
+                 f'{tips_html}{claims_html}</details>') if more_bits else ""
+    mini = " · ".join(x for x in [title_route or day.get("note") or "",
+                                 (f"{total_km:.0f}km" if total_km else "")] if x)
 
     # 例外标注制：已核验/低风险是常态不打标，只有"还没到位"和"有风险"才出徽章
     fid = day.get("fidelity", "skeleton")
@@ -226,19 +310,23 @@ def render_day(day):
       <header class="day-head">
         <span class="day-idx">D{di}</span>
         <span class="day-date">{esc(day.get("date", ""))}</span>
+        <span class="day-mini">{esc(mini)}</span>
         {risk_badge}
         {fid_badge}
+        <span class="day-chev" aria-hidden="true">›</span>
       </header>
-      <div class="day-route-title">{esc(title_route)}</div>
-      {chain_html}
-      {drive_html}
-      {diff_html}
-      {note_html}
-      {tips_html}
-      {'<ul class="stops">' + stops_html + '</ul>' if stops_html else ''}
-      {ov_html}
-      {render_claims(day.get("claims"))}
-      {'<ul class="warnings">' + warn_html + '</ul>' if warn_html else ''}
+      <div class="day-content">
+        <div class="day-route-title">{esc(title_route)}</div>
+        {chain_html}
+        {drive_html}
+        {render_nav_button(day)}
+        {diff_html}
+        {'<ul class="warnings">' + warn_html + '</ul>' if warn_html else ''}
+        {note_html}
+        {'<ul class="stops">' + stops_html + '</ul>' if stops_html else ''}
+        {ov_html}
+        {more_html}
+      </div>
     </section>'''
 
 
@@ -322,7 +410,7 @@ TEMPLATE = """<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>%%TITLE%%</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"
       onerror="document.documentElement.classList.add('no-map')">
@@ -360,10 +448,29 @@ TEMPLATE = """<!doctype html>
   .view-toggle { display:none; }
   @media (max-width: 900px) {
     .layout { flex-direction:column; height:auto; }
-    #map { order:-1; height:52vh; width:100%; flex:none; position:sticky; top:0; z-index:1500; }
-    #sidebar { width:100%; }
+    /* 地图收窄到 3 成，把高度让给行程；看路线用「看大图」切全屏 */
+    #map { order:-1; height:30vh; width:100%; flex:none; position:sticky; top:0; z-index:1500; }
+    #sidebar { width:100%; padding-bottom:calc(5rem + env(safe-area-inset-bottom)); }
+    /* 日卡手风琴：收起时就是一行 D/日期/路线/里程，展开一天才看内容（见脚本 accordion） */
+    .day-card { padding:0.7rem 0.9rem; scroll-margin-top:calc(30vh + 0.6rem); }
+    .day-head { cursor:pointer; align-items:center; }
+    .day-card .day-mini {
+      display:block; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis;
+      white-space:nowrap; color:var(--ink-dim); font-size:0.8rem;
+    }
+    .day-card.open .day-mini { display:none; }
+    .day-card .day-chev {
+      display:inline-block; color:var(--ink-dim); font-size:1.15rem; line-height:1;
+      transition:transform 0.15s;
+    }
+    .day-card.open .day-chev { transform:rotate(90deg); }
+    .badge.fidelity { margin-left:0; }
+    .day-content { display:none; }
+    .day-card.open .day-content { display:block; }
+    .summary { font-size:0.8rem; gap:0.3rem 0.9rem; padding:0.6rem 0.8rem; margin-bottom:0.7rem; }
+    h1 { font-size:1.1rem; margin:0.2rem 0 0.5rem; }
     .view-toggle {
-      display:block; position:fixed; bottom:1.1rem; left:50%; transform:translateX(-50%);
+      display:block; position:fixed; bottom:calc(1.1rem + env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%);
       z-index:3000; background:var(--accent); color:#fff; border:none; border-radius:999px;
       padding:0.55rem 1.4rem; font-size:0.92rem; font-weight:600;
       box-shadow:0 3px 10px rgba(0,0,0,0.35); cursor:pointer;
@@ -400,6 +507,13 @@ TEMPLATE = """<!doctype html>
   .day-head { display:flex; align-items:baseline; gap:0.6em; }
   .day-idx { font-weight:700; color:var(--accent); font-size:1.02rem; }
   .day-date { color:var(--ink-dim); font-size:0.82rem; }
+  .day-mini, .day-chev { display:none; }
+  .day-more { margin:0.5rem 0 0.2rem; font-size:0.85rem; }
+  .day-more > summary { color:var(--ink-dim); cursor:pointer; font-size:0.82rem; }
+  @media (min-width: 901px) {
+    /* 桌面端第二层默认展开、不提供收起，保持与旧版信息可见性一致 */
+    .day-more > summary { display:none; }
+  }
   .day-route-title { font-weight:600; font-size:0.92rem; margin:0.35rem 0 0.2rem; }
   .elev-chain {
     display:inline-block; background:var(--chain-bg); color:var(--chain-ink);
@@ -408,6 +522,14 @@ TEMPLATE = """<!doctype html>
   .drive-line { display:flex; justify-content:space-between; align-items:baseline;
                 font-size:0.9rem; margin:0.25rem 0; }
   .drive-label { color:var(--ink-dim); font-size:0.8rem; }
+  .nav-btn {
+    display:flex; align-items:center; justify-content:center; min-height:44px; margin:0.5rem 0;
+    background:var(--accent); color:#fff; border-radius:8px; font-size:0.92rem; font-weight:600;
+    text-decoration:none;
+  }
+  .nav-btn:active { opacity:0.8; }
+  .nav-hint { font-size:0.8rem; color:var(--warn); background:var(--warn-bg);
+              padding:0.4rem 0.6rem; border-radius:6px; margin:-0.2rem 0 0.5rem; }
   .day-note { font-size:0.83rem; color:var(--ink-dim); margin:0.3rem 0; }
   .claim-diff { font-size:0.82rem; color:var(--ink-dim); margin:0.2rem 0;
                 padding:0.25rem 0.5rem; background:var(--bg); border-radius:4px; }
@@ -545,6 +667,11 @@ TEMPLATE = """<!doctype html>
   }
 
   function selectDay(idx, scrollCard) {
+    if (isMobile() && !syncing) {  // 手机上「选中」= 展开那张卡，由 openDay 接管
+      if (String(selected) === String(idx)) return;
+      openDay(idx, scrollCard);
+      return;
+    }
     if (selected === idx) {  // 再点一次取消选中 → 回全览
       overview();
       return;
@@ -568,6 +695,7 @@ TEMPLATE = """<!doctype html>
 
   document.querySelectorAll('.day-card').forEach(function (card) {
     card.addEventListener('click', function (e) {
+      if (isMobile()) return;  // 手机上点卡 = 展开/收起，交给 day-head 与 openDay
       if (e.target.closest('details, a')) return;
       selectDay(card.getAttribute('data-day'), false);
     });
@@ -589,6 +717,66 @@ TEMPLATE = """<!doctype html>
 
   if (all.length) map.fitBounds(all, { padding: [24, 24] });
 
+  // 移动端手风琴：一次只展开一天，地图跟着展开的那天走
+  var mq = window.matchMedia('(max-width: 900px)');
+  function isMobile() { return mq.matches; }
+  var syncing = false;
+
+  function openDay(idx, scrollCard) {
+    document.querySelectorAll('.day-card').forEach(function (c) {
+      var on = String(c.getAttribute('data-day')) === String(idx);
+      c.classList.toggle('open', on);
+      var more = c.querySelector('.day-more');
+      if (more && !on) more.removeAttribute('open');
+    });
+    if (!syncing) {
+      syncing = true;
+      selectDay(idx, false);
+      syncing = false;
+    }
+    if (scrollCard) {
+      var card = document.getElementById('day-' + idx);
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }
+
+  document.querySelectorAll('.day-card .day-head').forEach(function (head) {
+    head.addEventListener('click', function () {
+      if (!isMobile()) return;
+      var card = head.closest('.day-card');
+      if (card.classList.contains('open')) {
+        card.classList.remove('open');
+        overview();
+      } else {
+        openDay(card.getAttribute('data-day'), false);
+      }
+    });
+  });
+
+  // 桌面端二级折叠强制展开且不给收（summary 已隐藏），手机端一律收起
+  function syncDetailFolds() {
+    document.querySelectorAll('.day-more').forEach(function (d) {
+      if (isMobile()) d.removeAttribute('open');
+      else d.setAttribute('open', '');
+    });
+  }
+  syncDetailFolds();
+  if (mq.addEventListener) mq.addEventListener('change', syncDetailFolds);
+  else if (mq.addListener) mq.addListener(syncDetailFolds);
+
+  if (isMobile()) {  // 默认展开今天；不在行程期就展开第一天
+    var today = new Date();
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    var todayStr = today.getFullYear() + '-' + pad(today.getMonth() + 1) + '-' + pad(today.getDate());
+    var picked = null;
+    document.querySelectorAll('.day-card').forEach(function (c) {
+      var d = c.querySelector('.day-date');
+      if (d && d.textContent.trim() === todayStr) picked = c;
+    });
+    if (!picked) picked = document.querySelector('.day-card');
+    if (picked) openDay(picked.getAttribute('data-day'), false);
+  }
+
   // 移动端：地图全屏 ↔ 行程列表 切换
   var tbtn = document.getElementById('viewToggle');
   if (tbtn) {
@@ -598,6 +786,44 @@ TEMPLATE = """<!doctype html>
       setTimeout(function () { map.invalidateSize(); if (all.length && full) map.fitBounds(all, { padding: [24, 24] }); }, 80);
     });
   }
+})();
+
+// 一键导航：按平台唤起高德 App（独立于地图脚本，地图加载失败也能用）
+(function () {
+  var ua = navigator.userAgent;
+  var platform = /MicroMessenger/i.test(ua) ? 'wechat'
+    : /iPhone|iPad|iPod/i.test(ua) ? 'ios'
+    : /Android|HarmonyOS/i.test(ua) ? 'android' : 'desktop';
+  var HINTS = {
+    wechat: '微信里打不开高德：点右上角 ··· 选「在浏览器打开」，再点导航',
+    desktop: '用手机打开本页，点这里即可在高德 App 里导航',
+    missing: '没有唤起高德地图？请确认手机已安装高德地图 App'
+  };
+  function hint(btn, key) {
+    var el = btn.nextElementSibling;
+    if (!el || !el.classList.contains('nav-hint')) {
+      el = document.createElement('div');
+      el.className = 'nav-hint';
+      btn.parentNode.insertBefore(el, btn.nextSibling);
+    }
+    el.textContent = HINTS[key];
+  }
+  var t = new Date();
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+  var todayStr = t.getFullYear() + '-' + pad(t.getMonth() + 1) + '-' + pad(t.getDate());
+  document.querySelectorAll('.nav-btn').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (platform === 'wechat' || platform === 'desktop') return hint(btn, platform);
+      // 当天的那一天：从当前位置出发；翻看其它日子：按行程起点，避免算出书外的路线
+      var fixed = btn.getAttribute('data-' + platform + '-fixed');
+      var date = btn.getAttribute('data-date');
+      location.href = (fixed && date && date !== todayStr) ? fixed : btn.getAttribute('data-' + platform);
+      // 唤起成功页面会进后台；2 秒后仍在前台 = 多半没装高德
+      setTimeout(function () { if (!document.hidden) hint(btn, 'missing'); }, 2000);
+    });
+  });
 })();
 </script>
 </body>
