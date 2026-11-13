@@ -50,8 +50,17 @@ Claude Code picks up user-level skills automatically in new sessions.
 
 The same HTML switches to a phone layout: a 30% map pinned on top, one line per day (date · route · distance), and tapping a day expands it — navigation button, stops, overnight. Tips and verification evidence fold one level deeper; risks and warnings always stay in the expanded view.
 
-- **One-tap AMap navigation**: a button on every day that has coordinates, with that day's waypoints in order, ending at its last stop. Segment endpoints set the backbone; stops not already covered by a segment are inserted before the destination, so a planned sight never falls off the route;
-- **Origin follows the date**: today routes from your current location; other days start from that day's own start point, so you never see a route "from my home to the destination" that isn't in the book. Days without a start point (in-town sightseeing) still use the current location.
+- **One-tap AMap navigation**: days with a navigable itinerary and an AMap-verified destination get one button, carrying verified waypoints in order. Segment endpoints set the backbone; verified stops not covered by a segment are inserted before the destination. Rest days with only an overnight stop, and days with an unverified destination, have no button;
+- **Origin follows the date**: the card dated today routes from your current location; other dates start from that day's own start point, avoiding a route "from my home" that isn't in the book. Missing dates and days without a fixed origin (such as in-town sightseeing) still use the current location.
+
+## Development checks
+
+```bash
+python3 -m unittest discover -s tests
+node --test tests/test_inline_js.js
+```
+
+Rendering only requires Python. The second command uses Node's built-in test runner for inline-JavaScript regressions; no npm packages are needed.
 
 ## How it works
 
