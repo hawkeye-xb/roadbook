@@ -23,7 +23,7 @@
         "properties": {
           "day_index": { "type": "integer" },
           "date": { "type": "string" },
-          "note": { "type": "string", "description": "当日一句话备注，显示在当天卡片正文首段" },
+          "note": { "type": "string", "description": "当日一句话备注，显示在当天卡片正文（警告之后、途经点之前）" },
           "tips": {
             "type": "object",
             "additionalProperties": { "type": "string" },

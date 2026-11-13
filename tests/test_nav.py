@@ -97,6 +97,26 @@ class DayNavPoints(unittest.TestCase):
     def test_nothing_to_navigate(self):
         self.assertEqual(render_html.day_nav_points({"segments": [], "stops": []}), [])
 
+    def test_unverified_stop_coordinates_do_not_enable_navigation(self):
+        for source in ("doc_claim", "llm_guess", "unverified"):
+            with self.subTest(source=source):
+                stop = P("未核验景点", 116.2, 40.2)
+                stop["source"] = source
+                self.assertEqual(render_html.day_nav_points(
+                    {"segments": [], "stops": [stop], "overnight": HHHT}), [])
+
+    def test_unverified_terminal_disables_navigation(self):
+        dest = P("原文终点", 111.7, 40.8)
+        dest["source"] = "doc_claim"
+        self.assertEqual(render_html.day_nav_points(
+            {"segments": [seg(BJ, dest)]}), [])
+
+    def test_unverified_extra_stop_is_not_silently_treated_as_gcj02(self):
+        stop = P("未核验途经", 114.87, 40.85)
+        stop["source"] = "llm_guess"
+        day = {"segments": [seg(BJ, ZJK)], "stops": [stop]}
+        self.assertEqual([p["name"] for p in render_html.day_nav_points(day)], ["张家口"])
+
 
 class AmapNavUrls(unittest.TestCase):
     def test_none_without_points(self):
@@ -152,6 +172,14 @@ class DayOrigin(unittest.TestCase):
 
     def test_no_origin_without_coordinates(self):
         self.assertIsNone(render_html.day_origin({"segments": [], "stops": [{"name": "无坐标"}]}))
+
+    def test_unverified_origin_does_not_create_fixed_start(self):
+        origin = P("原文起点", 116.4, 39.9)
+        origin["source"] = "doc_claim"
+        self.assertIsNone(render_html.day_origin({"segments": [seg(origin, ZJK)]}))
+        html = render_html.render_day({"day_index": 2, "segments": [seg(origin, ZJK)]})
+        self.assertIn('class="nav-btn"', html)
+        self.assertNotIn("-fixed=", html)
 
 
 class RenderDayNavButton(unittest.TestCase):

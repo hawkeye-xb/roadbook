@@ -60,6 +60,19 @@ def esc(s):
     return html.escape(str(s)) if s is not None else ""
 
 
+def script_json(value):
+    """JSON 放进 inline script 前按脚本上下文编码，不能让文本闭合 </script>。
+
+    HTML 实体转义不适合 JavaScript 字符串；这里用 \\uXXXX，JSON 解析后的值保持不变。
+    """
+    return (json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            .replace("&", "\\u0026")
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace(" ", "\\u2028")
+            .replace(" ", "\\u2029"))
+
+
 def day_risk(day):
     """低/中/高：error 级警告→高；warning（除预览聚合的坐标项）或季节性道路 claim→中。"""
     warns = [w for w in day.get("warnings", []) if w.get("code") != "UNVERIFIED_POI"]
@@ -170,6 +183,11 @@ def usable_place(p):
             and -180 <= lng <= 180 and -90 <= lat <= 90)
 
 
+def navigable_place(p):
+    """一键导航只接受高德核验的 GCJ-02；其他来源不能猜坐标系或偏移量。"""
+    return usable_place(p) and p.get("source") == "amap"
+
+
 def place_km(a, b):
     """两点直线距离（公里）。用来判断「景点是不是已经被路段端点覆盖」，不追求精度。"""
     lng1, lat1 = a
@@ -185,29 +203,30 @@ NEAR_KM = 2.0  # 途经点离某个路段端点这么近，就当作同一处，
 def day_nav_points(day):
     """当天一键导航的点序：路段终点是主干，当天景点插在终点前。
     起点不放（由 day_origin 决定）；无路段的日子退回 stops + 过夜点。
+    只接受 navigable_place 认可的高德核验坐标，不能将攻略/模型猜测当作 GCJ-02。
     景点离某个路段端点不到 NEAR_KM 就不再重复加（景区本身就是路段终点的日子）。
-    末点坐标不可用时整条返回空：宁可不出按钮，也不能让终点悄悄变成倒数第二个点。"""
+    末点不可导航时整条返回空：宁可不出按钮，也不能让终点悄悄变成倒数第二个点。"""
     segs = day.get("segments") or []
     stops = day.get("stops") or []
     if segs:
         ends = [s.get("to") for s in segs]
-        if ends and not usable_place(ends[-1]):
+        if ends and not navigable_place(ends[-1]):
             ov = day.get("overnight")
-            if usable_place(ov) and isinstance(ends[-1], dict) and ov.get("name") == ends[-1].get("name"):
+            if navigable_place(ov) and isinstance(ends[-1], dict) and ov.get("name") == ends[-1].get("name"):
                 ends = ends[:-1] + [ov]  # 末点缺坐标但过夜点同名可用：终点落在过夜点上
             else:
                 return []
-        seq = [p for p in ends if usable_place(p)]
-        extras = [s for s in stops if usable_place(s)
+        seq = [p for p in ends if navigable_place(p)]
+        extras = [s for s in stops if navigable_place(s)
                   and all(place_km(s["lnglat"], p["lnglat"]) > NEAR_KM for p in seq)]
         cands = seq[:-1] + extras + seq[-1:]
     else:
-        if not any(usable_place(s) for s in stops):
-            return []  # 休息日：只有过夜点，没有可导航的行程
+        if not any(navigable_place(s) for s in stops):
+            return []  # 休息日或没有已核验坐标的行程：不出导航按钮
         cands = list(stops) + [day.get("overnight")]
     pts = []
     for p in cands:
-        if not usable_place(p):
+        if not navigable_place(p):
             continue
         cur = {"name": p.get("name", ""), "lnglat": list(p["lnglat"])}
         if pts and pts[-1]["lnglat"] == cur["lnglat"]:  # 按坐标判重：同名不同点是两个地方
@@ -219,13 +238,13 @@ def day_nav_points(day):
 
 
 def day_origin(day):
-    """当天行程的起点：第一段的 from；城内日（无路段）退回第一个有坐标的途经点。"""
+    """当天行程起点：第一段的高德核验 from；城内日退回第一个已核验途经点。"""
     segs = day.get("segments") or []
     if segs:
         p = segs[0].get("from")
-        return {"name": p.get("name", ""), "lnglat": list(p["lnglat"])} if usable_place(p) else None
+        return {"name": p.get("name", ""), "lnglat": list(p["lnglat"])} if navigable_place(p) else None
     for s in day.get("stops") or []:
-        if usable_place(s):
+        if navigable_place(s):
             return {"name": s.get("name", ""), "lnglat": list(s["lnglat"])}
     return None
 
@@ -422,13 +441,13 @@ def collect_map_days(itinerary):
             d = (seg.get("to") or {}).get("lnglat")
             special = seg.get("special")
             if geom and len(geom) > 1:
-                segs_js.append({"pts": [to_latlng(p) for p in geom], "real": True, "sp": special})
+                segs_js.append({"pts": [to_latlng(p) for p in geom], "real": True, "sp": esc(special)})
             elif o and d:
-                segs_js.append({"pts": [to_latlng(o), to_latlng(d)], "real": False, "sp": special})
+                segs_js.append({"pts": [to_latlng(o), to_latlng(d)], "real": False, "sp": esc(special)})
             for rp in seg.get("refuel_points", []) or []:
                 if rp.get("lnglat"):
                     markers.append({"t": "rest", "ll": to_latlng(rp["lnglat"]),
-                                    "name": rp.get("name", ""), "desc": "补给点"})
+                                    "name": esc(rp.get("name", "")), "desc": "补给点"})
 
         for stop in day.get("stops", []):
             if stop.get("lnglat"):
@@ -440,14 +459,14 @@ def collect_map_days(itinerary):
                 for a in stop.get("advisories", []) or []:
                     desc_bits.append(str(a))
                 markers.append({"t": "scenic", "ll": to_latlng(stop["lnglat"]),
-                                "name": stop.get("name", ""), "desc": " · ".join(desc_bits),
-                                "wx": stop.get("weather")})
+                                "name": esc(stop.get("name", "")), "desc": esc(" · ".join(desc_bits)),
+                                "wx": esc(stop.get("weather"))})
 
         ov = day.get("overnight") or {}
         if ov.get("lnglat"):
             desc = f"D{day.get('day_index')} 过夜" + (f" · 海拔 {ov['elevation_m']:.0f}m" if ov.get("elevation_m") is not None and ALT_RELEVANT else "")
             markers.append({"t": "hotel", "ll": to_latlng(ov["lnglat"]),
-                            "name": ov.get("name", ""), "desc": desc, "wx": ov.get("weather")})
+                            "name": esc(ov.get("name", "")), "desc": esc(desc), "wx": esc(ov.get("weather"))})
 
         if not segs_js and not markers:
             continue
@@ -599,11 +618,17 @@ TEMPLATE = """<!doctype html>
   /* 移动端规则必须排在全部基础规则之后：同优先级下先写的会被后写的覆盖 */
   @media (max-width: 900px) {
     .layout { flex-direction:column; height:auto; }
+    /* 基础横幅规则 specificity 更高，必须显式恢复文档流；sticky 地图位于横幅下方 */
+    .preview-banner ~ .layout { height:auto; }
+    .preview-banner ~ .layout #map { top:var(--preview-banner-height, 3rem); }
     /* 地图收窄到 3 成，把高度让给行程；看路线用「看大图」切全屏 */
     #map { order:-1; height:30vh; width:100%; flex:none; position:sticky; top:0; z-index:1500; }
     #sidebar { width:100%; padding-bottom:calc(5rem + env(safe-area-inset-bottom)); }
     /* 日卡手风琴：收起时就是一行 D/日期/路线/里程，展开一天才看内容（见脚本 accordion） */
     .day-card { padding:0.7rem 0.9rem; scroll-margin-top:calc(30vh + 0.6rem); }
+    .preview-banner ~ .layout .day-card {
+      scroll-margin-top:calc(30vh + var(--preview-banner-height, 3rem) + 0.6rem);
+    }
     .day-head { cursor:pointer; align-items:center; min-height:44px; }
     .day-card .day-mini {
       display:block; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis;
@@ -632,7 +657,7 @@ TEMPLATE = """<!doctype html>
       padding:0.55rem 1.4rem; font-size:0.92rem; font-weight:600;
       box-shadow:0 3px 10px rgba(0,0,0,0.35); cursor:pointer;
     }
-    body.map-full #map { height:100vh; position:fixed; inset:0; }
+    body.map-full .layout #map { height:100vh; position:fixed; inset:0; }
     body.map-full #sidebar { display:none; }
   }
   @media (prefers-color-scheme: dark) {
@@ -665,6 +690,20 @@ TEMPLATE = """<!doctype html>
 <script>
 // 手风琴与日期归一化：不依赖地图脚本。离线、CDN 被墙、禁 JS 也要能读。
 (function () {
+  // 横幅会随宽度换行，sticky 偏移必须跟真实高度走，不能用固定 3rem 猜
+  var previewBanner = document.querySelector('.preview-banner');
+  function syncPreviewOffset() {
+    if (previewBanner) {
+      document.documentElement.style.setProperty('--preview-banner-height', previewBanner.offsetHeight + 'px');
+    }
+  }
+  syncPreviewOffset();
+  if (previewBanner && window.ResizeObserver) {
+    var previewObserver = new ResizeObserver(syncPreviewOffset);
+    previewObserver.observe(previewBanner);
+  }
+  window.addEventListener('resize', syncPreviewOffset);
+
   var mq = window.matchMedia('(max-width: 900px)');
   var cards = document.querySelectorAll('.day-card');
   function isMobile() { return mq.matches; }
@@ -744,10 +783,9 @@ TEMPLATE = """<!doctype html>
   syncMode();
   var lastMobile = mq.matches;
 
-  // 断点切换后手机端要有卡是展开的：旋转屏幕、拉窄窗口后不能变成「全部收起且点不开」
+  // 断点切换后手机端要有卡展开；优先桌面当前选中日，不能沿用旧 open 与地图分叉
   function ensureOpenCard() {
-    if (document.querySelector('.day-card.open')) return;
-    var picked = document.querySelector('.day-card.active');
+    var picked = document.querySelector('.day-card.active') || document.querySelector('.day-card.open');
     if (!picked) {
       var todayS = todayStr();
       cards.forEach(function (c) {
@@ -973,10 +1011,19 @@ TEMPLATE = """<!doctype html>
       if (platform === 'wechat' || platform === 'desktop') return hint(btn, platform);
       // 当天/无日期：从当前位置出发；翻看其它日子：按行程起点，避免算出书外的路线
       var fixed = btn.getAttribute('data-' + platform + '-fixed');
-      var useFixed = fixed && (!date || date !== todayStr());
+      var useFixed = fixed && date && date !== todayStr();
       location.href = useFixed ? fixed : btn.getAttribute('data-' + platform);
-      // 唤起成功页面会进后台；2 秒后仍在前台 = 多半没装高德
-      setTimeout(function () { if (!document.hidden) hint(btn, 'missing'); }, 2000);
+      // 唤起成功会触发 pagehide/隐藏；曾离开就不再于返回时误报。始终前台才提示可能未安装
+      var leftPage = false;
+      function onPageHide() { leftPage = true; }
+      function onVisibility() { if (document.hidden) leftPage = true; }
+      window.addEventListener('pagehide', onPageHide);
+      document.addEventListener('visibilitychange', onVisibility);
+      setTimeout(function () {
+        window.removeEventListener('pagehide', onPageHide);
+        document.removeEventListener('visibilitychange', onVisibility);
+        if (!leftPage && !document.hidden) hint(btn, 'missing');
+      }, 2000);
     });
   });
 })();
@@ -1038,7 +1085,7 @@ def main():
             itinerary.get("claims"),
             day_claims_exist=any(d.get("claims") for d in itinerary.get("days", []))),
         "%%DAYS_HTML%%": "".join(render_day(d) for d in itinerary.get("days", [])),
-        "%%MAP_DAYS_JSON%%": json.dumps(collect_map_days(itinerary), ensure_ascii=False, separators=(",", ":")),
+        "%%MAP_DAYS_JSON%%": script_json(collect_map_days(itinerary)),
     }
     out_html = TEMPLATE
     for k, v in replacements.items():

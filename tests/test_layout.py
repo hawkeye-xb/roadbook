@@ -69,6 +69,15 @@ class DayCardShell(unittest.TestCase):
             {"claim": "A", "verdict": "confirmed"}]})
         self.assertRegex(html, r'<details class="day-more[^"]*" open>')
 
+    def test_mobile_preview_banner_does_not_pin_layout_to_one_screen(self):
+        # 同 specificity 的移动覆盖必须在基础规则之后；否则 sticky 地图滚动到中途就离屏
+        mobile = render_html.TEMPLATE.split("@media (max-width: 900px)", 1)[1]
+        self.assertIn(".preview-banner ~ .layout { height:auto; }", mobile)
+        self.assertIn(".preview-banner ~ .layout #map { top:var(--preview-banner-height, 3rem); }", mobile)
+        # 全屏选择器必须同时盖过横幅下的 sticky top，否则 100vh 底部会超出视口
+        self.assertIn("body.map-full .layout #map { height:100vh; position:fixed; inset:0; }", mobile)
+        self.assertIn("new ResizeObserver(syncPreviewOffset)", render_html.TEMPLATE)
+
 
 if __name__ == "__main__":
     unittest.main()
